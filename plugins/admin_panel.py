@@ -146,13 +146,51 @@ async def delete_channel(client, callback):
 @Client.on_callback_query(filters.regex(r"^admin_bundles$"))
 async def show_bundles(client, callback):
     bundles = await db.get_all_bundles()
-    # Just show count and option to create
-    text = f"**📦 Bundles**\n\nTotal Created: {len(bundles)}\n\nUse the button below to start the interactive link creation."
+    text = f"**📦 Bundles**\n\nTotal Created: {len(bundles)}\n\nManage your bundles below."
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Create New Link", callback_data="start_create_link")],
+        [InlineKeyboardButton("🗑 Delete Bundle", callback_data="panel_del_bundle_menu")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
     await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^panel_del_bundle_menu$"))
+async def delete_bundle_menu(client, callback):
+    text = "**🗑 Delete Bundle**\n\nSelect a method:"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("List & Select (Recent)", callback_data="panel_list_del_bundles")],
+        # Could add "Enter Code" later if needed
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_bundles")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^panel_list_del_bundles$"))
+async def list_del_bundles(client, callback):
+    bundles = await db.get_all_bundles()
+    if not bundles:
+        await callback.answer("No bundles found.", show_alert=True)
+        return
+
+    # Sort by created_at desc if available, or just reverse list (assuming insertion order)
+    # Most recent first
+    recent = list(reversed(bundles))[:10]
+
+    markup = []
+    for b in recent:
+        title = b.get("title", "Untitled")[:20]
+        code = b.get("code")
+        markup.append([InlineKeyboardButton(f"🗑 {title} ({code})", callback_data=f"do_del_bund|{code}")])
+
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="panel_del_bundle_menu")])
+
+    await callback.edit_message_text("**Select Bundle to Delete:**", reply_markup=InlineKeyboardMarkup(markup))
+
+@Client.on_callback_query(filters.regex(r"^do_del_bund\|"))
+async def do_delete_bundle(client, callback):
+    code = callback.data.split("|")[1]
+    await db.delete_bundle(code)
+    await callback.answer(f"Bundle {code} deleted!", show_alert=True)
+    await list_del_bundles(client, callback)
 
 @Client.on_callback_query(filters.regex(r"^start_create_link$"))
 async def start_create_link_panel(client, callback):
@@ -224,7 +262,7 @@ async def panel_add_task(client, callback):
         "Send /cancel to cancel."
     )
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel"]))
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]))
 async def handle_panel_input(client, message):
     user_id = message.from_user.id
     if user_id in panel_states and panel_states[user_id] == "wait_task_input":

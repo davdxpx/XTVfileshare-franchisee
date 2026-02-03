@@ -87,6 +87,9 @@ class Database:
     async def increment_bundle_views(self, code):
         await self.bundles_col.update_one({"code": code}, {"$inc": {"views": 1}})
 
+    async def delete_bundle(self, code):
+        await self.bundles_col.delete_one({"code": code})
+
     # --- Tasks ---
     async def add_task(self, question, answer, options=None, task_type="text"):
         # options is list of strings for multiple choice

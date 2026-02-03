@@ -126,7 +126,7 @@ async def on_media_type_select(client, callback):
         "Please send the **Title** to search on TMDb (e.g. 'The Rookie')."
     )
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link"]))
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link", "admin", "start"]))
 async def on_text_input(client, message):
     user_id = message.from_user.id
     if user_id not in admin_states:
