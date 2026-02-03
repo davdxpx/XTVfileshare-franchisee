@@ -18,7 +18,12 @@ class Database:
     def connect(self):
         try:
             self.client = AsyncIOMotorClient(Config.MONGO_URI)
-            self.db = self.client.get_database()
+            try:
+                self.db = self.client.get_database()
+            except Exception:
+                # Fallback if no database specified in URI
+                self.db = self.client["fileshare_bot"]
+
             self.channels_col = self.db.channels
             self.bundles_col = self.db.bundles
             self.configs_col = self.db.configs
