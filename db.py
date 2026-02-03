@@ -45,10 +45,16 @@ class Database:
         )
 
     # --- Channels ---
-    async def add_channel(self, chat_id, title, username):
+    async def add_channel(self, chat_id, title, username, channel_type="storage", invite_link=None):
         await self.channels_col.update_one(
             {"chat_id": chat_id},
-            {"$set": {"title": title, "username": username, "approved": True}},
+            {"$set": {
+                "title": title,
+                "username": username,
+                "approved": True,
+                "type": channel_type,
+                "invite_link": invite_link
+            }},
             upsert=True
         )
 
@@ -56,7 +62,12 @@ class Database:
         await self.channels_col.delete_one({"chat_id": chat_id})
 
     async def get_approved_channels(self):
-        cursor = self.channels_col.find({"approved": True})
+        # Default to storage if type not set (legacy support)
+        cursor = self.channels_col.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]})
+        return await cursor.to_list(length=100)
+
+    async def get_force_sub_channels(self):
+        cursor = self.channels_col.find({"approved": True, "type": "force_sub"})
         return await cursor.to_list(length=100)
 
     async def is_channel_approved(self, chat_id):

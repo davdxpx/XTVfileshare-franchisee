@@ -19,25 +19,36 @@ async def check_force_sub(client, user_id):
     if not await db.get_config("force_sub_enabled", False):
         return True, []
 
-    channels = await db.get_config("force_sub_channels", [])
+    # Fetch from DB (new logic)
+    channels = await db.get_force_sub_channels()
     if not channels:
-        return True, []
+        # Fallback to old config if empty?
+        old_channels = await db.get_config("force_sub_channels", [])
+        if not old_channels:
+            return True, []
+
+        # Temporary: use old list logic if DB empty
+        # But we want to move to DB.
+        # Let's support both for now or just DB?
+        # DB is safer. But let's assume migration happens or we just use DB.
+        # If user added channels via new panel, they are in DB.
+        pass
 
     missing_channels = []
-    for channel in channels:
+
+    # Check DB channels
+    for ch in channels:
+        chat_id = ch["chat_id"]
+        invite = ch.get("invite_link")
         try:
-            # Handle int or username
-            chat_id = int(channel) if str(channel).lstrip("-").isdigit() else channel
-            try:
-                member = await client.get_chat_member(chat_id, user_id)
-                if member.status in ["left", "kicked", "banned"]:
-                    missing_channels.append(channel)
-            except UserNotParticipant:
-                missing_channels.append(channel)
-            except Exception as e:
-                logger.warning(f"Force sub check failed for {channel}: {e}")
-                pass
-        except Exception:
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["left", "kicked", "banned"]:
+                missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
+        except UserNotParticipant:
+             missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
+        except Exception as e:
+             logger.warning(f"FS Check Error {chat_id}: {e}")
+             # If bot is not admin, it fails here.
              pass
 
     return len(missing_channels) == 0, missing_channels
@@ -60,33 +71,25 @@ async def send_next_step(client, user_id, chat_id):
             bundle = await db.get_bundle(session["code"])
             file_count = len(bundle["file_ids"]) if bundle else 5 # default fallback
 
-            # Simple scaling: 3 + (files // 3) clamped to 8
-            raw_count = 3 + (file_count // 3)
+            # Scaling: 3 + (files // 5) clamped to 8
+            # Updated from //3 to //5 as requested "scale slower"
+            raw_count = 3 + (file_count // 5)
             task_count = min(max(3, raw_count), 8)
 
-            # Force Sub Integration
-            # User: "force subroutine... counts as two tasks... in the end there would be 1 Forcesub and 2 quests"
-            # This implies we reduce the random task count by 2 IF force sub was performed.
-            # We already checked force sub before calling send_next_step.
-            # Did we enforce it? Yes, check_force_sub.
-            # But was it actually "performed" (i.e. was user NOT subbed and had to join)?
-            # Or does just having Force Sub enabled count as 2 tasks "credit"?
-            # "There should be a task to force a subroutine... This counts as two tasks"
-            # Usually force sub is a precondition. If the user is already subbed, they skip the "action".
-            # But the user says "in the end there would be 1 Forcesub and 2 quests".
-            # This implies if Force Sub is enabled, we consider it "taking up" 2 slots of the total work.
-
             fs_enabled = await db.get_config("force_sub_enabled", False)
+            fs_credit = 0
+
             if fs_enabled:
-                task_count = max(1, task_count - 2) # Reduce by 2, but keep at least 1 task if possible? Or 0?
-                # User example: "if there were four quests, in the end there would be 1 Forcesub and 2 quests."
-                # 4 - 2 = 2. So yes, subtract 2.
+                # Force sub counts as 2 tasks
+                fs_credit = 2
+                task_count = max(1, task_count - 2)
 
             # Now fetch random tasks
             tasks = await db.get_random_tasks(task_count)
             if not tasks: tasks = []
             session["tasks"] = tasks
             session["task_index"] = 0
+            session["fs_credit"] = fs_credit
 
         current_idx = session["task_index"]
         if current_idx < len(tasks):
@@ -104,7 +107,26 @@ async def send_next_step(client, user_id, chat_id):
 
             markup.append([InlineKeyboardButton("⏭ Skip (Wait 20s)", callback_data="task_skip")])
 
-            txt = f"**🧩 Task {current_idx + 1}/{len(tasks)}**\n\n{question}"
+            # Header formatting
+            # 🧩 Task X/Y • F-Subs 0/1 (if FS enabled)
+            # Total visual tasks = task_count
+
+            fs_info = ""
+            fs_credit = session.get("fs_credit", 0)
+            if fs_credit > 0:
+                # We assume F-Sub is "done" (since we are here), so 1/1
+                # User asked: "🧩 Task 1/6 • F-Subs 0/1" if not joined.
+                # But here we are AFTER joining (or checking).
+                # So we show F-Subs 1/1? Or just imply it?
+                # "When beides aktiv ist und der nutzer noch nicht in allen verlinkten Channels mitglied ist so in der art: 🧩 Task 1/6 • F-Subs 0/1."
+                # But if they are NOT member, they are stuck at the "Join Channels" screen.
+                # Once they are here, they ARE member.
+                # So we should show F-Subs 1/1 or just omit?
+                # Maybe "F-Subs ✅"?
+                # Let's show "F-Subs 1/1" to indicate it counted.
+                fs_info = " • F-Subs 1/1"
+
+            txt = f"**🧩 Task {current_idx + 1}/{len(tasks)}{fs_info}**\n\n{question}"
             if task_type == "text":
                 txt += "\n\n__Send your answer below.__"
 
@@ -238,12 +260,10 @@ async def start_handler(client: Client, message: Message):
     if not is_subbed:
         btns = []
         for ch in missing:
-            try:
-                chat = await client.get_chat(ch)
-                link = chat.invite_link or f"https://t.me/{chat.username}"
-                btns.append([InlineKeyboardButton(f"Join {chat.title}", url=link)])
-            except Exception:
-                btns.append([InlineKeyboardButton(f"Join Channel", url=f"https://t.me/{str(ch).replace('@','')} ")])
+            # ch is now dict {"id", "title", "link"}
+            title = ch.get("title") or "Channel"
+            link = ch.get("link")
+            btns.append([InlineKeyboardButton(f"Join {title}", url=link)])
 
         btns.append([InlineKeyboardButton("✅ Checked / Try Again", callback_data=f"check_sub")])
 

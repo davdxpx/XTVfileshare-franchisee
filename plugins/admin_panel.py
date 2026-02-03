@@ -27,10 +27,11 @@ async def show_main_menu(message_or_callback):
             InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")
         ],
         [
-            InlineKeyboardButton("📢 Channels", callback_data="admin_channels"),
-            InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles")
+            InlineKeyboardButton("📢 DB Channels", callback_data="admin_channels"),
+            InlineKeyboardButton("🔒 Force-Subs", callback_data="admin_force_subs")
         ],
         [
+            InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles"),
             InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks")
         ],
         [
@@ -105,7 +106,7 @@ async def toggle_setting_panel(client, callback):
 
     await show_settings(client, callback)
 
-# --- Channels ---
+# --- Channels (Storage) ---
 
 @Client.on_callback_query(filters.regex(r"^admin_channels$"))
 async def show_channels(client, callback):
@@ -124,6 +125,26 @@ async def show_channels(client, callback):
 
     await callback.edit_message_text("**📢 Storage Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
 
+# --- Force Subs ---
+
+@Client.on_callback_query(filters.regex(r"^admin_force_subs$"))
+async def show_force_subs(client, callback):
+    channels = await db.get_force_sub_channels()
+
+    markup = []
+    if channels:
+        for ch in channels:
+            markup.append([
+                InlineKeyboardButton(f"{ch.get('title')} ({ch.get('chat_id')})", callback_data=f"view_ch|{ch.get('chat_id')}")
+            ])
+    else:
+        markup.append([InlineKeyboardButton("No FS channels.", callback_data="noop")])
+
+    markup.append([InlineKeyboardButton("➕ Add Channel (Manual)", callback_data="panel_add_fs_manual")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_main")])
+
+    await callback.edit_message_text("**🔒 Force Sub Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
+
 @Client.on_callback_query(filters.regex(r"^view_ch\|"))
 async def view_channel(client, callback):
     chat_id = int(callback.data.split("|")[1])
@@ -137,9 +158,27 @@ async def view_channel(client, callback):
 @Client.on_callback_query(filters.regex(r"^del_ch\|"))
 async def delete_channel(client, callback):
     chat_id = int(callback.data.split("|")[1])
+    # Determine type to return to correct menu? Or just go to main.
+    # We can check type before deleting if we want perfectly correct navigation,
+    # but removing and going back to main or trying to refresh current view is harder since we don't pass 'origin'.
+    # Let's try to detect based on what view we are in? No context.
+    # Just go back to main or try to guess.
+
     await db.remove_channel(chat_id)
     await callback.answer("Channel removed!", show_alert=True)
-    await show_channels(client, callback)
+    await show_main_menu(callback)
+
+@Client.on_callback_query(filters.regex(r"^panel_add_fs_manual$"))
+async def panel_add_fs_manual(client, callback):
+    panel_states[callback.from_user.id] = "wait_fs_input"
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        "**➕ Add Force Sub Channel**\n\n"
+        "Please add the bot as Admin to the channel first!\n\n"
+        "Then send the **Channel ID** (e.g. -100123456) or **Username** (@channel).\n"
+        "Or forward a message from it."
+    )
 
 # --- Bundles ---
 
@@ -291,7 +330,45 @@ async def handle_panel_input(client, message):
 
     state = panel_states[user_id]
 
-    if state == "wait_task_input":
+    if state == "wait_fs_input":
+        text = message.text
+        chat_id = None
+
+        # Try to parse ID
+        if text.lstrip("-").isdigit():
+            chat_id = int(text)
+        elif text.startswith("@"):
+            # We need to resolve username
+            try:
+                chat = await client.get_chat(text)
+                chat_id = chat.id
+            except Exception:
+                await message.reply("❌ Could not resolve username. Make sure bot is admin or use ID.")
+                return
+        elif message.forward_from_chat:
+             chat_id = message.forward_from_chat.id
+        else:
+             await message.reply("❌ Invalid input. Send ID, Username, or Forward.")
+             return
+
+        # Add as Force Sub
+        try:
+            chat = await client.get_chat(chat_id)
+            invite = None
+            try:
+                invite_obj = await client.create_chat_invite_link(chat_id, name="Fileshare Bot FS")
+                invite = invite_obj.invite_link
+            except:
+                invite = chat.invite_link
+
+            await db.add_channel(chat_id, chat.title, chat.username, "force_sub", invite)
+            await message.reply(f"✅ Added **{chat.title}** as Force Sub channel.")
+            del panel_states[user_id]
+            await show_main_menu(message)
+        except Exception as e:
+            await message.reply(f"❌ Error adding channel: {e}")
+
+    elif state == "wait_task_input":
         text = message.text
         # Re-use single processing logic for consistency or keep separate
         # Just simple copy here
