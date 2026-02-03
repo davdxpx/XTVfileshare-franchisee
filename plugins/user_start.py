@@ -311,7 +311,7 @@ async def on_task_ans(client, callback):
     else:
         await callback.answer("❌ Wrong answer. Try again or skip.", show_alert=True)
 
-@Client.on_message(filters.text & ~filters.command(["start", "create_link"]))
+@Client.on_message(filters.text & ~filters.command(["start", "create_link", "admin", "cancel"]), group=2)
 async def on_text_answer(client, message):
     user_id = message.from_user.id
     if user_id not in user_sessions:

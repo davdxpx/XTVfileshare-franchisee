@@ -126,11 +126,13 @@ async def on_media_type_select(client, callback):
         "Please send the **Title** to search on TMDb (e.g. 'The Rookie')."
     )
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link", "admin", "start"]))
+from pyrogram import ContinuePropagation
+
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link", "admin", "start"]), group=1)
 async def on_text_input(client, message):
     user_id = message.from_user.id
     if user_id not in admin_states:
-        return
+        raise ContinuePropagation
 
     state = admin_states[user_id]
     step = state["step"]

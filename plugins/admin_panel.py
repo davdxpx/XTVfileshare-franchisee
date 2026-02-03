@@ -278,10 +278,16 @@ async def panel_bulk_add_task(client, callback):
         "Send /cancel to cancel."
     )
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]))
+# Use ContinuePropagation to allow other handlers to run if not in state
+from pyrogram import ContinuePropagation
+
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]), group=1)
 async def handle_panel_input(client, message):
     user_id = message.from_user.id
-    if user_id not in panel_states: return
+    if user_id not in panel_states:
+        # Important: If not in state, do not stop propagation!
+        # This allows user_start.py's text handler to pick it up if it's a task answer.
+        raise ContinuePropagation
 
     state = panel_states[user_id]
 
@@ -313,6 +319,8 @@ async def handle_panel_input(client, message):
 
     elif state == "wait_bulk_task_input":
         text = message.text
+        # Handle entities/formatting? Pyrogram message.text is usually plain text unless we access message.text.markdown/html
+        # Using raw text is safer for splitting.
         lines = text.split("\n")
         added = 0
         failed = 0
@@ -321,8 +329,10 @@ async def handle_panel_input(client, message):
             line = line.strip()
             if not line: continue
 
+            # Simple parsing: Q | A | Opts
             parts = [p.strip() for p in line.split("|")]
             if len(parts) < 2:
+                # Try to be lenient? No, strict format needed for machine processing.
                 failed += 1
                 continue
 
@@ -342,3 +352,14 @@ async def handle_panel_input(client, message):
         await message.reply(f"✅ Processed!\nAdded: {added}\nFailed: {failed}")
         del panel_states[user_id]
         await show_main_menu(message)
+
+# Ensure cancel works for panel states explicitly
+@Client.on_message(filters.command("cancel") & filters.user(Config.ADMIN_ID), group=1)
+async def cancel_panel(client, message):
+    user_id = message.from_user.id
+    if user_id in panel_states:
+        del panel_states[user_id]
+        await message.reply("❌ Panel action cancelled.")
+    else:
+        # Let other handlers (like admin_bundles) handle it
+        raise ContinuePropagation
