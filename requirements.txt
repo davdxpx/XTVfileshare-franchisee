@@ -2,3 +2,4 @@ pyrogram
 motor
 python-dotenv
 tgcrypto
+requests

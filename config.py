@@ -9,6 +9,7 @@ class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     MONGO_URI = os.getenv("MONGO_URI", "")
     ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+    TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 
     # Default Configs (fallback if DB empty)
     DEFAULT_DELAY = 0  # No delay as per clarification

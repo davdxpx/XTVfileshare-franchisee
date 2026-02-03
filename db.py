@@ -64,8 +64,9 @@ class Database:
         return bool(doc)
 
     # --- Bundles ---
-    async def create_bundle(self, code, file_ids, source_channel, title, original_range):
-        await self.bundles_col.insert_one({
+    async def create_bundle(self, code, file_ids, source_channel, title, original_range, **kwargs):
+        # kwargs allows passing extra fields like tmdb_id, media_type, etc.
+        doc = {
             "code": code,
             "file_ids": file_ids,
             "source_channel": source_channel,
@@ -73,7 +74,9 @@ class Database:
             "range": original_range,
             "created_at": time.time(),
             "views": 0
-        })
+        }
+        doc.update(kwargs)
+        await self.bundles_col.insert_one(doc)
 
     async def get_bundle(self, code):
         return await self.bundles_col.find_one({"code": code})
