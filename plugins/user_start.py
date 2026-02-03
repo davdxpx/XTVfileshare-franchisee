@@ -53,8 +53,37 @@ async def send_next_step(client, user_id, chat_id):
     if await db.get_config("tasks_enabled", False):
         tasks = session.get("tasks")
         if tasks is None:
-            count = Config.TASKS_PER_REQUEST
-            tasks = await db.get_random_tasks(count)
+            # Determine dynamic count
+            # Logic: Min 3, Max 8. Based on file count?
+            # User said: "minimum 3, maximum 8" and "vary depending on how many files are included"
+
+            bundle = await db.get_bundle(session["code"])
+            file_count = len(bundle["file_ids"]) if bundle else 5 # default fallback
+
+            # Simple scaling: 3 + (files // 3) clamped to 8
+            raw_count = 3 + (file_count // 3)
+            task_count = min(max(3, raw_count), 8)
+
+            # Force Sub Integration
+            # User: "force subroutine... counts as two tasks... in the end there would be 1 Forcesub and 2 quests"
+            # This implies we reduce the random task count by 2 IF force sub was performed.
+            # We already checked force sub before calling send_next_step.
+            # Did we enforce it? Yes, check_force_sub.
+            # But was it actually "performed" (i.e. was user NOT subbed and had to join)?
+            # Or does just having Force Sub enabled count as 2 tasks "credit"?
+            # "There should be a task to force a subroutine... This counts as two tasks"
+            # Usually force sub is a precondition. If the user is already subbed, they skip the "action".
+            # But the user says "in the end there would be 1 Forcesub and 2 quests".
+            # This implies if Force Sub is enabled, we consider it "taking up" 2 slots of the total work.
+
+            fs_enabled = await db.get_config("force_sub_enabled", False)
+            if fs_enabled:
+                task_count = max(1, task_count - 2) # Reduce by 2, but keep at least 1 task if possible? Or 0?
+                # User example: "if there were four quests, in the end there would be 1 Forcesub and 2 quests."
+                # 4 - 2 = 2. So yes, subtract 2.
+
+            # Now fetch random tasks
+            tasks = await db.get_random_tasks(task_count)
             if not tasks: tasks = []
             session["tasks"] = tasks
             session["task_index"] = 0

@@ -219,6 +219,7 @@ async def show_tasks(client, callback):
 
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Task", callback_data="panel_add_task")],
+        [InlineKeyboardButton("➕ Bulk Add Tasks", callback_data="panel_bulk_add_task")],
         [InlineKeyboardButton("📄 List All (Text)", callback_data="panel_list_tasks")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
@@ -262,11 +263,32 @@ async def panel_add_task(client, callback):
         "Send /cancel to cancel."
     )
 
+@Client.on_callback_query(filters.regex(r"^panel_bulk_add_task$"))
+async def panel_bulk_add_task(client, callback):
+    panel_states[callback.from_user.id] = "wait_bulk_task_input"
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        "**➕ Bulk Add Tasks**\n\n"
+        "Send a list of tasks. **One task per line.**\n"
+        "Format per line: `Question | Answer | Option1, Option2`\n\n"
+        "Example:\n"
+        "Q1? | A1\n"
+        "Q2? | A2 | Opt1, Opt2\n\n"
+        "Send /cancel to cancel."
+    )
+
 @Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]))
 async def handle_panel_input(client, message):
     user_id = message.from_user.id
-    if user_id in panel_states and panel_states[user_id] == "wait_task_input":
+    if user_id not in panel_states: return
+
+    state = panel_states[user_id]
+
+    if state == "wait_task_input":
         text = message.text
+        # Re-use single processing logic for consistency or keep separate
+        # Just simple copy here
         parts = [p.strip() for p in text.split("|")]
 
         if len(parts) < 2:
@@ -286,5 +308,37 @@ async def handle_panel_input(client, message):
         await db.add_task(question, answer, options, task_type)
         await message.reply(f"✅ Task Added!\n\nQ: {question}\nA: {answer}")
 
+        del panel_states[user_id]
+        await show_main_menu(message)
+
+    elif state == "wait_bulk_task_input":
+        text = message.text
+        lines = text.split("\n")
+        added = 0
+        failed = 0
+
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 2:
+                failed += 1
+                continue
+
+            question = parts[0]
+            answer = parts[1]
+            options = []
+            task_type = "text"
+
+            if len(parts) > 2 and parts[2]:
+                raw_opts = parts[2]
+                options = [o.strip() for o in raw_opts.split(",")]
+                task_type = "quiz" if options else "text"
+
+            await db.add_task(question, answer, options, task_type)
+            added += 1
+
+        await message.reply(f"✅ Processed!\nAdded: {added}\nFailed: {failed}")
         del panel_states[user_id]
         await show_main_menu(message)
