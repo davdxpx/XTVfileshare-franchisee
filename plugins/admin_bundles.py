@@ -1,45 +1,318 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import Config
 from db import db
-from utils import generate_random_code, get_file_id
+from utils.helpers import generate_random_code, get_file_id
+from utils.tmdb import search_tmdb
 from log import get_logger
 import asyncio
 
 logger = get_logger(__name__)
 
-# Simple in-memory state
+# State management for wizard
 # {user_id: {"step": str, "data": dict}}
 admin_states = {}
 
-async def process_bundle_creation(client, message, channel_id, start_id, end_id):
-    if start_id > end_id:
-        start_id, end_id = end_id, start_id
+# --- Helper to cancel ---
+async def cancel_process(client, user_id, message=None):
+    if user_id in admin_states:
+        del admin_states[user_id]
+    if message:
+        await message.reply("❌ Operation cancelled.")
 
-    status_msg = await message.reply("⏳ **Processing bundle...** Fetching messages.")
+# --- Start Creation (Command) ---
 
-    try:
-        # Check if channel is approved
-        if not await db.is_channel_approved(channel_id):
-            await status_msg.edit("❌ This channel is not in the approved database channels list.")
+@Client.on_message(filters.command("create_link") & filters.user(Config.ADMIN_ID))
+async def create_link_start(client: Client, message: Message):
+    # Support Manual? Maybe just deprecate manual for now or keep it simple.
+    # The requirement is "personalisieren den vorgang viel besser".
+    # Let's stick to interactive only for the rich metadata flow.
+
+    admin_states[message.from_user.id] = {"step": "wait_start_msg", "data": {}}
+    await message.reply(
+        "🔄 **Bundle Wizard**\n\n"
+        "Please **forward** the **first message** of the bundle from the storage channel."
+    )
+
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.forwarded)
+async def on_forward_received(client: Client, message: Message):
+    user_id = message.from_user.id
+
+    # Auto-trigger single file mode if not in state
+    if user_id not in admin_states:
+        if message.forward_from_chat:
+            # Single file forward trigger
+            admin_states[user_id] = {
+                "step": "select_media_type", # Jump straight to type selection
+                "data": {
+                    "channel_id": message.forward_from_chat.id,
+                    "start_id": message.forward_from_message_id,
+                    "end_id": message.forward_from_message_id # Single file
+                }
+            }
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎬 Movie", callback_data="type_movie")],
+                [InlineKeyboardButton("📺 Series", callback_data="type_tv")],
+                [InlineKeyboardButton("📝 Subtitles", callback_data="type_subs")]
+            ])
+            await message.reply(
+                "⚡ **Single File Forward Detected**\n\n"
+                "Creating bundle from this message.\n"
+                "**Select Content Type:**",
+                reply_markup=markup
+            )
+            return
+        return
+
+    state = admin_states[user_id]
+    step = state["step"]
+
+    if step == "wait_start_msg":
+        if not message.forward_from_chat:
+            await message.reply("❌ Please forward from a channel.")
             return
 
-        # Fetch messages
-        # Chunking just in case, though 100 is standard limit usually
-        all_messages = []
+        state["data"]["channel_id"] = message.forward_from_chat.id
+        state["data"]["start_id"] = message.forward_from_message_id
+        state["step"] = "wait_end_msg"
+
+        await message.reply(
+            f"✅ Start set: `{message.forward_from_message_id}`\n"
+            "Now **forward** the **last message**."
+        )
+
+    elif step == "wait_end_msg":
+        if not message.forward_from_chat:
+            await message.reply("❌ Please forward from a channel.")
+            return
+
+        if message.forward_from_chat.id != state["data"]["channel_id"]:
+            await message.reply("❌ Channel mismatch! Forward from the same channel.")
+            return
+
+        state["data"]["end_id"] = message.forward_from_message_id
+
+        # Now fetch file count to confirm?
+        # Let's move to Media Type selection
+        state["step"] = "select_media_type"
+
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 Movie", callback_data="type_movie")],
+            [InlineKeyboardButton("📺 Series", callback_data="type_tv")],
+            [InlineKeyboardButton("📝 Subtitles", callback_data="type_subs")]
+        ])
+
+        await message.reply(
+            "✅ Range Defined.\n\n**Select Content Type:**",
+            reply_markup=markup
+        )
+
+# --- Wizard Callbacks ---
+
+@Client.on_callback_query(filters.regex(r"^type_"))
+async def on_media_type_select(client, callback):
+    user_id = callback.from_user.id
+    if user_id not in admin_states:
+        await callback.answer("Session expired.", show_alert=True)
+        return
+
+    mtype = callback.data.split("_")[1] # movie, tv, subs
+    admin_states[user_id]["data"]["media_type"] = mtype
+
+    # Next: Title Input
+    admin_states[user_id]["step"] = "wait_title_query"
+    await callback.edit_message_text(
+        f"Selected: **{mtype.upper()}**\n\n"
+        "Please send the **Title** to search on TMDb (e.g. 'The Rookie')."
+    )
+
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link"]))
+async def on_text_input(client, message):
+    user_id = message.from_user.id
+    if user_id not in admin_states:
+        return
+
+    state = admin_states[user_id]
+    step = state["step"]
+
+    if step == "wait_title_query":
+        query = message.text
+        mtype = state["data"]["media_type"]
+        search_type = "tv" if mtype == "tv" or mtype == "subs" else "movie" # Assuming subs usually for series? Or ask?
+        # User said: "Bei Untertiteln sowas ähnliches... Bei Film/Filmen ebenfalls fragen."
+        # Let's assume subs can be for both, but usually series.
+        # Actually user example: "Subtitles for The Rookie S1 E1".
+        # Let's search 'tv' if series/subs, 'movie' if movie.
+        # Wait, subs could be for movie.
+        # Let's default 'subs' to 'tv' search for now based on context, or maybe search both?
+        # Simpler: If subs, we might need to ask "Movie or Series?" before?
+        # But for now, let's treat subs same as Series if user implies Series structure (S1 E1).
+
+        results = search_tmdb(query, search_type)
+
+        if not results:
+            await message.reply("❌ No results found on TMDb. Try another title.")
+            return
+
+        # Show results buttons
+        buttons = []
+        for r in results[:5]: # Top 5
+            title = r.get("name") or r.get("title")
+            year = (r.get("first_air_date") or r.get("release_date") or "")[:4]
+            tid = r.get("id")
+            buttons.append([InlineKeyboardButton(f"{title} ({year})", callback_data=f"tmdb_{tid}")])
+
+        buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_wizard")])
+
+        state["step"] = "wait_tmdb_select"
+        await message.reply("🔎 **Select the correct result:**", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif step == "wait_season_num":
+        # Expecting integer (1-20)
+        try:
+            season = int(message.text)
+            state["data"]["season_number"] = season
+            state["step"] = "wait_ep_count"
+            await message.reply(f"✅ Season {season}.\n\n**How many episodes are in this season?** (e.g. 20)")
+        except ValueError:
+            await message.reply("❌ Please enter a valid number.")
+
+    elif step == "wait_ep_count":
+        try:
+            count = int(message.text)
+            state["data"]["episode_count"] = count
+            state["step"] = "wait_bundle_eps"
+
+            # Buttons for easy selection
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("All Episodes", callback_data="eps_all")],
+                [InlineKeyboardButton("Manual Input (e.g. 1-5)", callback_data="eps_manual")]
+            ])
+            await message.reply(
+                f"✅ {count} Episodes.\n\n**Which episodes are in this BUNDLE?**",
+                reply_markup=markup
+            )
+        except ValueError:
+            await message.reply("❌ Please enter a valid number.")
+
+    elif step == "wait_manual_eps":
+        # "1,3,5" or "1-5"
+        state["data"]["bundle_episodes"] = message.text
+        # Proceed to Finalize
+        await finalize_bundle(client, user_id, message)
+
+@Client.on_callback_query(filters.regex(r"^tmdb_"))
+async def on_tmdb_select(client, callback):
+    user_id = callback.from_user.id
+    if user_id not in admin_states:
+        await callback.answer("Expired.")
+        return
+
+    tmdb_id = callback.data.split("_")[1]
+    admin_states[user_id]["data"]["tmdb_id"] = tmdb_id
+    mtype = admin_states[user_id]["data"]["media_type"]
+
+    if mtype == "tv":
+        # Ask Season
+        admin_states[user_id]["step"] = "wait_season_num"
+        await callback.edit_message_text("✅ Selected.\n\n**Which Season is it?** (Send number 1-20)")
+    elif mtype == "subs":
+        # Assuming subs follow Series flow for now based on "The Rookie S1 E1" example
+        admin_states[user_id]["step"] = "wait_season_num"
+        await callback.edit_message_text("✅ Selected (Subs).\n\n**Which Season?**")
+    else: # Movie
+        # Ask Qualities
+        # Checkbox style? "720p", "1080p".
+        # We can simulate checkboxes by editing message, but simpler to just ask user to select ONE main quality or type?
+        # User said: "different quality levels... selectable as a checkbox or button".
+        # Let's do a multi-select menu.
+        admin_states[user_id]["step"] = "wait_quality"
+        admin_states[user_id]["data"]["qualities"] = []
+        await show_quality_menu(callback, [])
+
+async def show_quality_menu(message_or_callback, selected):
+    # qual_720p, qual_1080p, qual_4k, qual_done
+    options = ["720p", "1080p", "2160p (4K)", "HDR", "H.265"]
+    buttons = []
+    for opt in options:
+        prefix = "✅ " if opt in selected else ""
+        buttons.append(InlineKeyboardButton(f"{prefix}{opt}", callback_data=f"qual_{opt}"))
+
+    # 2 per row
+    rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton("Done / Continue ➡️", callback_data="qual_done")])
+
+    text = "**Select Qualities/Features:**\n(Click to toggle, then Done)"
+    markup = InlineKeyboardMarkup(rows)
+
+    if isinstance(message_or_callback, Message):
+        await message_or_callback.reply(text, reply_markup=markup)
+    else:
+        await message_or_callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^qual_"))
+async def on_quality_toggle(client, callback):
+    user_id = callback.from_user.id
+    if user_id not in admin_states: return
+
+    data = callback.data.split("_")[1]
+    current_selected = admin_states[user_id]["data"]["qualities"]
+
+    if data == "done":
+        await finalize_bundle(client, user_id, callback.message)
+        return
+
+    if data in current_selected:
+        current_selected.remove(data)
+    else:
+        current_selected.append(data)
+
+    admin_states[user_id]["data"]["qualities"] = current_selected
+    await show_quality_menu(callback, current_selected)
+
+@Client.on_callback_query(filters.regex(r"^eps_"))
+async def on_eps_select(client, callback):
+    user_id = callback.from_user.id
+    mode = callback.data.split("_")[1]
+
+    if mode == "all":
+        admin_states[user_id]["data"]["bundle_episodes"] = "All"
+        await finalize_bundle(client, user_id, callback.message)
+    elif mode == "manual":
+        admin_states[user_id]["step"] = "wait_manual_eps"
+        await callback.edit_message_text("⌨️ **Enter Episodes:**\n\nExamples: `1-5` or `1,3,5`")
+
+async def finalize_bundle(client, user_id, message_obj):
+    state = admin_states[user_id]
+    data = state["data"]
+
+    # Extract existing data
+    channel_id = data["channel_id"]
+    start_id = data["start_id"]
+    end_id = data.get("end_id", start_id) # if single
+
+    # Process files (Fetching IDs)
+    status_msg = await client.send_message(user_id, "⏳ **Finalizing Bundle...** Fetching files.")
+
+    # Re-use logic from old create_bundle
+    if start_id > end_id: start_id, end_id = end_id, start_id
+
+    file_ids = []
+
+    try:
+        # Check channel
+        if not await db.is_channel_approved(channel_id):
+            await status_msg.edit("❌ Channel not approved.")
+            return
+
         ids = list(range(start_id, end_id + 1))
         chunk_size = 200
-
+        all_messages = []
         for i in range(0, len(ids), chunk_size):
             chunk = ids[i:i + chunk_size]
             msgs = await client.get_messages(channel_id, chunk)
-            if not isinstance(msgs, list): # Single message case
-                msgs = [msgs]
+            if not isinstance(msgs, list): msgs = [msgs]
             all_messages.extend(msgs)
-
-        file_ids = []
-        # Title usually comes from the first message caption/filename or generated
-        title = f"Bundle {start_id}-{end_id}"
 
         for msg in all_messages:
             if not msg: continue
@@ -52,24 +325,28 @@ async def process_bundle_creation(client, message, channel_id, start_id, end_id)
                     "file_size": fsize,
                     "mime_type": fmime
                 })
-                # Use first file name as bundle title if generic
-                if title.startswith("Bundle") and fname:
-                    title = fname
 
         if not file_ids:
-            await status_msg.edit("❌ No files found in the specified range.")
+            await status_msg.edit("❌ No files found.")
             return
 
-        # Create Code
+        # Generate Code
         code = generate_random_code()
 
-        # Save to DB
+        # Save Bundle
         await db.create_bundle(
             code=code,
             file_ids=file_ids,
             source_channel=channel_id,
-            title=title,
-            original_range={"start": start_id, "end": end_id}
+            title=f"Bundle {code}", # Placeholder title, real info in metadata
+            original_range={"start": start_id, "end": end_id},
+            # New Metadata
+            tmdb_id=data.get("tmdb_id"),
+            media_type=data.get("media_type"),
+            season=data.get("season_number"),
+            episodes_label=data.get("bundle_episodes"),
+            qualities=data.get("qualities"),
+            episode_count_total=data.get("episode_count")
         )
 
         bot_username = Config.BOT_USERNAME
@@ -77,86 +354,18 @@ async def process_bundle_creation(client, message, channel_id, start_id, end_id)
 
         await status_msg.edit(
             f"✅ **Bundle Created!**\n\n"
+            f"🎬 Type: {data.get('media_type')}\n"
+            f"🆔 TMDb: {data.get('tmdb_id')}\n"
             f"📄 Files: {len(file_ids)}\n"
-            f"🔗 Link: `{link}`\n"
-            f"🆔 Code: `{code}`"
+            f"🔗 Link: `{link}`"
         )
 
-    except Exception as e:
-        logger.error(f"Bundle creation failed: {e}")
-        await status_msg.edit(f"❌ Error: {e}")
-
-# --- Interactive Workflow ---
-
-@Client.on_message(filters.command("create_link") & filters.user(Config.ADMIN_ID))
-async def create_link_start(client: Client, message: Message):
-    # Check args for Manual Mode
-    args = message.command
-    if len(args) == 4:
-        # /create_link channel_id start end
-        try:
-            channel_id = int(args[1])
-            start_id = int(args[2])
-            end_id = int(args[3])
-            await process_bundle_creation(client, message, channel_id, start_id, end_id)
-            return
-        except ValueError:
-            await message.reply("❌ Invalid format. Use: `/create_link channel_id start_id end_id`")
-            return
-
-    # Interactive Mode
-    admin_states[message.from_user.id] = {"step": "wait_start_msg", "data": {}}
-    await message.reply(
-        "🔄 **Link Creation Mode**\n\n"
-        "Please **forward** the **first message** of the bundle from the storage channel."
-    )
-
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.forwarded)
-async def on_forward_received(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_id not in admin_states:
-        return
-
-    state = admin_states[user_id]
-    step = state["step"]
-
-    if step == "wait_start_msg":
-        if not message.forward_from_chat:
-            await message.reply("❌ Please forward from a channel.")
-            return
-
-        # Save start info
-        state["data"]["channel_id"] = message.forward_from_chat.id
-        state["data"]["start_id"] = message.forward_from_message_id
-        state["step"] = "wait_end_msg"
-
-        await message.reply(
-            f"✅ Start set to ID `{message.forward_from_message_id}` from `{message.forward_from_chat.title}`.\n\n"
-            "Now **forward** the **last message**."
-        )
-
-    elif step == "wait_end_msg":
-        if not message.forward_from_chat:
-            await message.reply("❌ Please forward from a channel.")
-            return
-
-        if message.forward_from_chat.id != state["data"]["channel_id"]:
-            await message.reply("❌ Channel mismatch! Please forward from the same channel.")
-            return
-
-        end_id = message.forward_from_message_id
-        start_id = state["data"]["start_id"]
-        channel_id = state["data"]["channel_id"]
-
-        # Cleanup state
         del admin_states[user_id]
 
-        await process_bundle_creation(client, message, channel_id, start_id, end_id)
+    except Exception as e:
+        logger.error(f"Bundle Error: {e}")
+        await status_msg.edit(f"❌ Error: {e}")
 
-@Client.on_message(filters.command("cancel") & filters.user(Config.ADMIN_ID))
-async def cancel_creation(client, message):
-    if message.from_user.id in admin_states:
-        del admin_states[message.from_user.id]
-        await message.reply("❌ Operation cancelled.")
-    else:
-        await message.reply("Nothing to cancel.")
+@Client.on_callback_query(filters.regex(r"^cancel_wizard$"))
+async def cancel_wiz(client, callback):
+    await cancel_process(client, callback.from_user.id, callback.message)
