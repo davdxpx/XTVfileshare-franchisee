@@ -19,15 +19,20 @@ class QuestEngine:
         steps = []
         counts = {"task": 0, "sub": 0, "share": 0}
 
-        # 2. Force Share (Priority: Low? User said order: Task -> Sub -> Share)
-        # But we allocate slots now.
+        # 2. Force Share
         share_enabled = await db.get_config("force_share_enabled", False)
         if share_enabled and current_points < goal_points:
-            # Add Share Step
-            # Value: 2 points
-            steps.append({"type": "share", "points": 2})
-            counts["share"] += 1
-            current_points += 2
+            # Select random share channel
+            all_shares = await db.get_share_channels()
+            if all_shares:
+                share_ch = random.choice(all_shares)
+                steps.append({
+                    "type": "share",
+                    "points": 2,
+                    "data": {"link": share_ch.get("link"), "text": share_ch.get("text")}
+                })
+                counts["share"] += 1
+                current_points += 2
 
         # 3. Force Subs
         fs_enabled = await db.get_config("force_sub_enabled", False)
@@ -36,22 +41,32 @@ class QuestEngine:
             all_fs = await db.get_force_sub_channels()
             missing = []
 
-            # Check membership
+            # Check membership logic
             for ch in all_fs:
+                chat_id = ch["chat_id"]
                 try:
-                    # We need to check if user is ALREADY in it.
-                    # If already in, we DON'T add it as a quest step (because it's already done).
-                    # Logic: "pool aussucht welchen kanälen der nutzer erstmal halt noch nicht folgt"
-                    member = await client.get_chat_member(ch["chat_id"], user_id)
+                    # Try to refresh peer if needed
+                    try:
+                        await client.get_chat(chat_id)
+                    except: pass
+
+                    member = await client.get_chat_member(chat_id, user_id)
+                    # Only add if NOT a member
                     if member.status in ["left", "kicked", "banned"]:
                         missing.append(ch)
-                except Exception:
-                    # Can't check? Assume missing/add to pool so they get the link
+                except Exception as e:
+                    # If we can't verify (e.g. PeerIdInvalid despite refresh), we should probably assume "Missing" to be safe?
+                    # User requested: "checken ob ich in all den mitgliedern ob ich da drin bin"
+                    # If we assume missing, we show the join button.
+                    # If user IS member but bot fails to see it, they are stuck.
+                    # Given the "Secure Bot" requirement, we usually fail closed (assume missing).
+                    # But for "PeerIdInvalid" specifically, if we assume missing, user sees "Join".
+                    # When they click "I Joined", we check again. If it still fails, loop.
+                    # We need to trust the process or log it.
+                    # Let's assume missing.
                     missing.append(ch)
 
             # Select channels to fill points
-            # 1 Sub = 2 points
-            # Max Subs? Let's say up to 3 subs (6 points) or until goal filled.
             random.shuffle(missing)
 
             for ch in missing:

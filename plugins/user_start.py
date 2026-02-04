@@ -202,16 +202,19 @@ async def process_quest_step(client, user_id, chat_id):
         await client.send_message(chat_id, text, reply_markup=markup)
 
     elif stype == "share":
-        share_link = await db.get_config("force_share_link", f"https://t.me/{Config.BOT_USERNAME}")
-        share_msg = await db.get_config("force_share_text", "Check this out!")
+        # Get data from step
+        share_data = step.get("data", {})
+        share_link = share_data.get("link") or f"https://t.me/{Config.BOT_USERNAME}"
+        raw_text = share_data.get("text") or "Check this out! {channel_link}"
 
-        # Proper URL encoding manually or via urllib if needed, but pyrogram/tg usually handles basic params.
-        # Ideally import urllib.parse.quote
+        # Replace placeholder
+        final_text = raw_text.replace("{channel_link}", share_link)
+
         from urllib.parse import quote
-        safe_link = quote(share_link)
-        safe_text = quote(share_msg)
-
-        share_url = f"https://t.me/share/url?url={safe_link}&text={safe_text}"
+        # User requested: "link inside text", so we put everything in 'text' param and leave 'url' empty?
+        # Standard: t.me/share/url?text=...
+        safe_text = quote(final_text)
+        share_url = f"https://t.me/share/url?text={safe_text}"
 
         text = (
             f"**{header}**\n\n"
@@ -224,9 +227,6 @@ async def process_quest_step(client, user_id, chat_id):
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("↗️ Share to Friends", url=share_url)]
         ])
-
-        # Log for debug
-        logger.info(f"Showing Share Step to {user_id}. URL: {share_url}")
 
         await client.send_message(chat_id, text, reply_markup=markup)
 
@@ -314,7 +314,7 @@ async def sub_check_handler(client, callback):
 
     await callback.answer("❌ You are not in the channel yet!", show_alert=True)
 
-@Client.on_message(filters.forwarded, group=2)
+@Client.on_message(filters.forwarded & ~filters.user(Config.ADMIN_ID), group=2)
 async def share_check_handler(client, message):
     user_id = message.from_user.id
     if user_id not in user_sessions: return
@@ -326,7 +326,16 @@ async def share_check_handler(client, message):
     step = session["quest"]["steps"][idx]
 
     if step["type"] == "share":
-        # Any forward is accepted as "proof" based on requirements
+        # Any forward is accepted
         await message.reply("✅ Share verified!")
         session["quest"]["current_index"] += 1
         await process_quest_step(client, user_id, message.chat.id)
+
+# Separate handler for Admin to ensure it works even if admin panel logic interferes?
+# Actually, the problem might be that for Admin, the 'group=1' handler in admin_bundles/panel catches it?
+# We added ContinuePropagation there.
+# Let's add a specific debug or explicit handler for admin forward in share context.
+@Client.on_message(filters.forwarded & filters.user(Config.ADMIN_ID), group=2)
+async def share_check_handler_admin(client, message):
+    # Same logic
+    await share_check_handler(client, message)
