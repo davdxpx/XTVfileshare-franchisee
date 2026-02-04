@@ -46,6 +46,20 @@ async def main():
     Config.BOT_USERNAME = me.username
     logger.info(f"Bot started as @{me.username}")
 
+    # Warmup Peer Cache
+    logger.info("Warming up peer cache...")
+    channels = await db.get_approved_channels()
+    fs_channels = await db.get_force_sub_channels()
+    all_chats = channels + fs_channels
+
+    unique_ids = set(c["chat_id"] for c in all_chats)
+    for chat_id in unique_ids:
+        try:
+            await app.get_chat(chat_id)
+            # logger.info(f"Cached peer: {chat_id}")
+        except Exception as e:
+            logger.warning(f"Failed to cache peer {chat_id}: {e}")
+
     await idle()
     await app.stop()
 

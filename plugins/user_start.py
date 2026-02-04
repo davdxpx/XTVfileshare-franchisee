@@ -220,12 +220,28 @@ async def process_quest_step(client, user_id, chat_id):
             "2. Click **Verify** when done."
         )
 
-        markup = InlineKeyboardMarkup([
+        markup_share = InlineKeyboardMarkup([
+            [InlineKeyboardButton("↗️ Share to Friends", url=share_url)]
+        ])
+
+        markup_verify = InlineKeyboardMarkup([
             [InlineKeyboardButton("↗️ Share to Friends", url=share_url)],
             [InlineKeyboardButton("✅ Verify", callback_data="share_verify_fake")]
         ])
 
-        await client.send_message(chat_id, text, reply_markup=markup)
+        msg = await client.send_message(chat_id, text, reply_markup=markup_share)
+
+        # Delayed appearance of Verify button
+        # Run in background task to avoid blocking?
+        # process_quest_step is async, but we want to return.
+        asyncio.create_task(delayed_verify_button(msg, markup_verify))
+
+async def delayed_verify_button(message, markup):
+    await asyncio.sleep(5)
+    try:
+        await message.edit_reply_markup(reply_markup=markup)
+    except Exception as e:
+        logger.warning(f"Failed to update share markup: {e}")
 
 # --- Handlers ---
 
