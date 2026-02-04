@@ -24,13 +24,14 @@ async def on_bot_promoted(client: Client, chat_member: ChatMemberUpdated):
         try:
             await client.send_message(
                 Config.ADMIN_ID,
-                f"📢 **New Database Channel Request**\n\n"
+                f"📢 **New Channel Request**\n\n"
                 f"**Title:** {chat.title}\n"
                 f"**ID:** `{chat.id}`\n"
-                f"**Username:** @{chat.username or 'None'}",
+                f"**Username:** @{chat.username or 'None'}\n\n"
+                "Do you want to accept this channel?",
                 reply_markup=InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("✅ Accept", callback_data=f"chan_accept|{chat.id}"),
+                        InlineKeyboardButton("✅ Accept", callback_data=f"chan_ask_type|{chat.id}"),
                         InlineKeyboardButton("❌ Reject", callback_data=f"chan_reject|{chat.id}")
                     ]
                 ])
@@ -39,29 +40,53 @@ async def on_bot_promoted(client: Client, chat_member: ChatMemberUpdated):
             logger.error(f"Failed to notify admin: {e}")
 
 # --- Callback: Accept/Reject Channel ---
-@Client.on_callback_query(filters.regex(r"^chan_(accept|reject)\|"))
+@Client.on_callback_query(filters.regex(r"^chan_(ask_type|reject|set_type)\|"))
 async def handle_channel_decision(client: Client, callback: CallbackQuery):
     if callback.from_user.id != Config.ADMIN_ID:
         await callback.answer("You are not authorized.", show_alert=True)
         return
 
-    action, chat_id = callback.data.split("|")
-    chat_id = int(chat_id)
+    data = callback.data.split("|")
+    action = data[0]
+    chat_id = int(data[1])
 
-    if action == "chan_accept":
-        # We need to fetch chat details again to store them, or just rely on what we have?
-        # Better to fetch to be sure.
+    if action == "chan_ask_type":
+        # Ask for type
+        await callback.edit_message_text(
+            "✅ **Accepted.** Now select the channel type:",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🗄 DB Channel", callback_data=f"chan_set_type|{chat_id}|storage"),
+                    InlineKeyboardButton("🔒 Force Sub", callback_data=f"chan_set_type|{chat_id}|force_sub")
+                ]
+            ])
+        )
+
+    elif action == "chan_set_type":
+        ctype = data[2]
         try:
             chat = await client.get_chat(chat_id)
-            await db.add_channel(chat_id, chat.title, chat.username)
-            await callback.edit_message_text(
-                f"✅ **Channel Approved**\n\nTitle: {chat.title}\nID: `{chat.id}`"
-            )
-            await callback.answer("Channel approved!")
+            invite_link = None
 
-            # Optionally send a message to the channel confirming?
-            # "Bot is now active here." - User didn't ask for it, but it's good practice.
-            # I'll skip it to keep it stealthy as requested ("private").
+            if ctype == "force_sub":
+                # Generate invite link for force sub
+                try:
+                    invite = await client.create_chat_invite_link(chat_id, name="Fileshare Bot FS")
+                    invite_link = invite.invite_link
+                except Exception as e:
+                    logger.warning(f"Failed to create invite link: {e}")
+                    # Try getting existing or username
+                    invite_link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
+
+            await db.add_channel(chat_id, chat.title, chat.username, ctype, invite_link)
+
+            label = "Storage Channel" if ctype == "storage" else "Force Sub Channel"
+            await callback.edit_message_text(
+                f"✅ **Channel Configured!**\n\n"
+                f"Title: {chat.title}\n"
+                f"Type: **{label}**\n"
+                f"Link: {invite_link or 'N/A'}"
+            )
 
         except Exception as e:
             await callback.answer(f"Error: {e}", show_alert=True)

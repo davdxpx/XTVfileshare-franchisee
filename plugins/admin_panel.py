@@ -27,10 +27,11 @@ async def show_main_menu(message_or_callback):
             InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")
         ],
         [
-            InlineKeyboardButton("📢 Channels", callback_data="admin_channels"),
-            InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles")
+            InlineKeyboardButton("📢 DB Channels", callback_data="admin_channels"),
+            InlineKeyboardButton("🔒 Force-Subs", callback_data="admin_force_subs")
         ],
         [
+            InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles"),
             InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks")
         ],
         [
@@ -105,7 +106,7 @@ async def toggle_setting_panel(client, callback):
 
     await show_settings(client, callback)
 
-# --- Channels ---
+# --- Channels (Storage) ---
 
 @Client.on_callback_query(filters.regex(r"^admin_channels$"))
 async def show_channels(client, callback):
@@ -124,6 +125,26 @@ async def show_channels(client, callback):
 
     await callback.edit_message_text("**📢 Storage Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
 
+# --- Force Subs ---
+
+@Client.on_callback_query(filters.regex(r"^admin_force_subs$"))
+async def show_force_subs(client, callback):
+    channels = await db.get_force_sub_channels()
+
+    markup = []
+    if channels:
+        for ch in channels:
+            markup.append([
+                InlineKeyboardButton(f"{ch.get('title')} ({ch.get('chat_id')})", callback_data=f"view_ch|{ch.get('chat_id')}")
+            ])
+    else:
+        markup.append([InlineKeyboardButton("No FS channels.", callback_data="noop")])
+
+    markup.append([InlineKeyboardButton("➕ Add Channel (Manual)", callback_data="panel_add_fs_manual")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_main")])
+
+    await callback.edit_message_text("**🔒 Force Sub Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
+
 @Client.on_callback_query(filters.regex(r"^view_ch\|"))
 async def view_channel(client, callback):
     chat_id = int(callback.data.split("|")[1])
@@ -137,22 +158,97 @@ async def view_channel(client, callback):
 @Client.on_callback_query(filters.regex(r"^del_ch\|"))
 async def delete_channel(client, callback):
     chat_id = int(callback.data.split("|")[1])
+    # Determine type to return to correct menu? Or just go to main.
+    # We can check type before deleting if we want perfectly correct navigation,
+    # but removing and going back to main or trying to refresh current view is harder since we don't pass 'origin'.
+    # Let's try to detect based on what view we are in? No context.
+    # Just go back to main or try to guess.
+
     await db.remove_channel(chat_id)
     await callback.answer("Channel removed!", show_alert=True)
-    await show_channels(client, callback)
+    await show_main_menu(callback)
+
+@Client.on_callback_query(filters.regex(r"^panel_add_fs_manual$"))
+async def panel_add_fs_manual(client, callback):
+    panel_states[callback.from_user.id] = "wait_fs_input"
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        "**➕ Add Force Sub Channel**\n\n"
+        "Please add the bot as Admin to the channel first!\n\n"
+        "Then send the **Channel ID** (e.g. -100123456) or **Username** (@channel).\n"
+        "Or forward a message from it."
+    )
 
 # --- Bundles ---
 
 @Client.on_callback_query(filters.regex(r"^admin_bundles$"))
 async def show_bundles(client, callback):
     bundles = await db.get_all_bundles()
-    # Just show count and option to create
-    text = f"**📦 Bundles**\n\nTotal Created: {len(bundles)}\n\nUse the button below to start the interactive link creation."
+    text = f"**📦 Bundles**\n\nTotal Created: {len(bundles)}\n\nManage your bundles below."
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Create New Link", callback_data="start_create_link")],
+        [InlineKeyboardButton("✏️ Manage Bundles", callback_data="panel_manage_bundles")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
     await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^panel_manage_bundles$"))
+async def manage_bundles_menu(client, callback):
+    bundles = await db.get_all_bundles()
+    if not bundles:
+        await callback.answer("No bundles found.", show_alert=True)
+        return
+
+    # Sort recent
+    recent = list(reversed(bundles))[:10]
+
+    markup = []
+    for b in recent:
+        title = b.get("title", "Untitled")[:25]
+        code = b.get("code")
+        markup.append([InlineKeyboardButton(f"{title} ({code})", callback_data=f"manage_bund|{code}")])
+
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bundles")])
+
+    await callback.edit_message_text("**Select Bundle to Manage:**", reply_markup=InlineKeyboardMarkup(markup))
+
+@Client.on_callback_query(filters.regex(r"^manage_bund\|"))
+async def manage_single_bundle(client, callback):
+    code = callback.data.split("|")[1]
+    bundle = await db.get_bundle(code)
+    if not bundle:
+        await callback.answer("Bundle not found.", show_alert=True)
+        await manage_bundles_menu(client, callback)
+        return
+
+    title = bundle.get("title", "Untitled")
+    views = bundle.get("views", 0)
+
+    text = f"**📦 Bundle Info**\n\nTitle: `{title}`\nCode: `{code}`\nViews: `{views}`"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Rename", callback_data=f"rename_bund|{code}")],
+        [InlineKeyboardButton("🗑 Delete", callback_data=f"del_bund_confirm|{code}")],
+        [InlineKeyboardButton("🔙 Back", callback_data="panel_manage_bundles")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^del_bund_confirm\|"))
+async def del_bund_confirm(client, callback):
+    code = callback.data.split("|")[1]
+    await db.delete_bundle(code)
+    await callback.answer("Bundle deleted!", show_alert=True)
+    await manage_bundles_menu(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^rename_bund\|"))
+async def rename_bund_start(client, callback):
+    code = callback.data.split("|")[1]
+    panel_states[callback.from_user.id] = {"state": "wait_bundle_rename", "code": code}
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        f"**✏️ Rename Bundle**\n\nCode: `{code}`\n\nEnter new title (or /cancel):"
+    )
 
 @Client.on_callback_query(filters.regex(r"^start_create_link$"))
 async def start_create_link_panel(client, callback):
@@ -181,6 +277,7 @@ async def show_tasks(client, callback):
 
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Task", callback_data="panel_add_task")],
+        [InlineKeyboardButton("➕ Bulk Add Tasks", callback_data="panel_bulk_add_task")],
         [InlineKeyboardButton("📄 List All (Text)", callback_data="panel_list_tasks")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
@@ -224,10 +321,82 @@ async def panel_add_task(client, callback):
         "Send /cancel to cancel."
     )
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel"]))
+@Client.on_callback_query(filters.regex(r"^panel_bulk_add_task$"))
+async def panel_bulk_add_task(client, callback):
+    panel_states[callback.from_user.id] = "wait_bulk_task_input"
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        "**➕ Bulk Add Tasks**\n\n"
+        "Send a list of tasks. **One task per line.**\n"
+        "Format per line: `Question | Answer | Option1, Option2`\n\n"
+        "Example:\n"
+        "Q1? | A1\n"
+        "Q2? | A2 | Opt1, Opt2\n\n"
+        "Send /cancel to cancel."
+    )
+
+# Use ContinuePropagation to allow other handlers to run if not in state
+from pyrogram import ContinuePropagation
+
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]), group=1)
 async def handle_panel_input(client, message):
     user_id = message.from_user.id
-    if user_id in panel_states and panel_states[user_id] == "wait_task_input":
+    if user_id not in panel_states:
+        raise ContinuePropagation
+
+    # Check if state is dict (complex state) or str (legacy simple state)
+    raw_state = panel_states[user_id]
+    state_key = raw_state if isinstance(raw_state, str) else raw_state.get("state")
+
+    if state_key == "wait_bundle_rename":
+        code = raw_state["code"]
+        new_title = message.text
+        await db.update_bundle_title(code, new_title)
+        await message.reply(f"✅ Bundle renamed to: `{new_title}`")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_fs_input":
+        text = message.text
+        chat_id = None
+
+        # Try to parse ID
+        if text.lstrip("-").isdigit():
+            chat_id = int(text)
+        elif text.startswith("@"):
+            # We need to resolve username
+            try:
+                chat = await client.get_chat(text)
+                chat_id = chat.id
+            except Exception:
+                await message.reply("❌ Could not resolve username. Make sure bot is admin or use ID.")
+                return
+        elif message.forward_from_chat:
+             chat_id = message.forward_from_chat.id
+        else:
+             await message.reply("❌ Invalid input. Send ID, Username, or Forward.")
+             return
+
+        # Add as Force Sub
+        try:
+            chat = await client.get_chat(chat_id)
+            invite = None
+            try:
+                invite_obj = await client.create_chat_invite_link(chat_id, name="Fileshare Bot FS")
+                invite = invite_obj.invite_link
+            except:
+                invite = chat.invite_link
+
+            await db.add_channel(chat_id, chat.title, chat.username, "force_sub", invite)
+            await message.reply(f"✅ Added **{chat.title}** as Force Sub channel.")
+            del panel_states[user_id]
+            await show_main_menu(message)
+        except Exception as e:
+            await message.reply(f"❌ Error adding channel: {e}")
+
+    elif state_key == "wait_task_input":
         text = message.text
         parts = [p.strip() for p in text.split("|")]
 
@@ -250,3 +419,49 @@ async def handle_panel_input(client, message):
 
         del panel_states[user_id]
         await show_main_menu(message)
+
+    elif state_key == "wait_bulk_task_input":
+        text = message.text
+        # Using raw text is safer for splitting.
+        lines = text.split("\n")
+        added = 0
+        failed = 0
+
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+
+            # Simple parsing: Q | A | Opts
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 2:
+                # Try to be lenient? No, strict format needed for machine processing.
+                failed += 1
+                continue
+
+            question = parts[0]
+            answer = parts[1]
+            options = []
+            task_type = "text"
+
+            if len(parts) > 2 and parts[2]:
+                raw_opts = parts[2]
+                options = [o.strip() for o in raw_opts.split(",")]
+                task_type = "quiz" if options else "text"
+
+            await db.add_task(question, answer, options, task_type)
+            added += 1
+
+        await message.reply(f"✅ Processed!\nAdded: {added}\nFailed: {failed}")
+        del panel_states[user_id]
+        await show_main_menu(message)
+
+# Ensure cancel works for panel states explicitly
+@Client.on_message(filters.command("cancel") & filters.user(Config.ADMIN_ID), group=1)
+async def cancel_panel(client, message):
+    user_id = message.from_user.id
+    if user_id in panel_states:
+        del panel_states[user_id]
+        await message.reply("❌ Panel action cancelled.")
+    else:
+        # Let other handlers (like admin_bundles) handle it
+        raise ContinuePropagation

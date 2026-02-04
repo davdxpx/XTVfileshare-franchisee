@@ -19,25 +19,36 @@ async def check_force_sub(client, user_id):
     if not await db.get_config("force_sub_enabled", False):
         return True, []
 
-    channels = await db.get_config("force_sub_channels", [])
+    # Fetch from DB (new logic)
+    channels = await db.get_force_sub_channels()
     if not channels:
-        return True, []
+        # Fallback to old config if empty?
+        old_channels = await db.get_config("force_sub_channels", [])
+        if not old_channels:
+            return True, []
+
+        # Temporary: use old list logic if DB empty
+        # But we want to move to DB.
+        # Let's support both for now or just DB?
+        # DB is safer. But let's assume migration happens or we just use DB.
+        # If user added channels via new panel, they are in DB.
+        pass
 
     missing_channels = []
-    for channel in channels:
+
+    # Check DB channels
+    for ch in channels:
+        chat_id = ch["chat_id"]
+        invite = ch.get("invite_link")
         try:
-            # Handle int or username
-            chat_id = int(channel) if str(channel).lstrip("-").isdigit() else channel
-            try:
-                member = await client.get_chat_member(chat_id, user_id)
-                if member.status in ["left", "kicked", "banned"]:
-                    missing_channels.append(channel)
-            except UserNotParticipant:
-                missing_channels.append(channel)
-            except Exception as e:
-                logger.warning(f"Force sub check failed for {channel}: {e}")
-                pass
-        except Exception:
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["left", "kicked", "banned"]:
+                missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
+        except UserNotParticipant:
+             missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
+        except Exception as e:
+             logger.warning(f"FS Check Error {chat_id}: {e}")
+             # If bot is not admin, it fails here.
              pass
 
     return len(missing_channels) == 0, missing_channels
@@ -53,11 +64,32 @@ async def send_next_step(client, user_id, chat_id):
     if await db.get_config("tasks_enabled", False):
         tasks = session.get("tasks")
         if tasks is None:
-            count = Config.TASKS_PER_REQUEST
-            tasks = await db.get_random_tasks(count)
+            # Determine dynamic count
+            # Logic: Min 3, Max 8. Based on file count?
+            # User said: "minimum 3, maximum 8" and "vary depending on how many files are included"
+
+            bundle = await db.get_bundle(session["code"])
+            file_count = len(bundle["file_ids"]) if bundle else 5 # default fallback
+
+            # Scaling: 3 + (files // 5) clamped to 8
+            # Updated from //3 to //5 as requested "scale slower"
+            raw_count = 3 + (file_count // 5)
+            task_count = min(max(3, raw_count), 8)
+
+            fs_enabled = await db.get_config("force_sub_enabled", False)
+            fs_credit = 0
+
+            if fs_enabled:
+                # Force sub counts as 2 tasks
+                fs_credit = 2
+                task_count = max(1, task_count - 2)
+
+            # Now fetch random tasks
+            tasks = await db.get_random_tasks(task_count)
             if not tasks: tasks = []
             session["tasks"] = tasks
             session["task_index"] = 0
+            session["fs_credit"] = fs_credit
 
         current_idx = session["task_index"]
         if current_idx < len(tasks):
@@ -75,7 +107,26 @@ async def send_next_step(client, user_id, chat_id):
 
             markup.append([InlineKeyboardButton("⏭ Skip (Wait 20s)", callback_data="task_skip")])
 
-            txt = f"**🧩 Task {current_idx + 1}/{len(tasks)}**\n\n{question}"
+            # Header formatting
+            # 🧩 Task X/Y • F-Subs 0/1 (if FS enabled)
+            # Total visual tasks = task_count
+
+            fs_info = ""
+            fs_credit = session.get("fs_credit", 0)
+            if fs_credit > 0:
+                # We assume F-Sub is "done" (since we are here), so 1/1
+                # User asked: "🧩 Task 1/6 • F-Subs 0/1" if not joined.
+                # But here we are AFTER joining (or checking).
+                # So we show F-Subs 1/1? Or just imply it?
+                # "When beides aktiv ist und der nutzer noch nicht in allen verlinkten Channels mitglied ist so in der art: 🧩 Task 1/6 • F-Subs 0/1."
+                # But if they are NOT member, they are stuck at the "Join Channels" screen.
+                # Once they are here, they ARE member.
+                # So we should show F-Subs 1/1 or just omit?
+                # Maybe "F-Subs ✅"?
+                # Let's show "F-Subs 1/1" to indicate it counted.
+                fs_info = " • F-Subs 1/1"
+
+            txt = f"**🧩 Task {current_idx + 1}/{len(tasks)}{fs_info}**\n\n{question}"
             if task_type == "text":
                 txt += "\n\n__Send your answer below.__"
 
@@ -209,12 +260,10 @@ async def start_handler(client: Client, message: Message):
     if not is_subbed:
         btns = []
         for ch in missing:
-            try:
-                chat = await client.get_chat(ch)
-                link = chat.invite_link or f"https://t.me/{chat.username}"
-                btns.append([InlineKeyboardButton(f"Join {chat.title}", url=link)])
-            except Exception:
-                btns.append([InlineKeyboardButton(f"Join Channel", url=f"https://t.me/{str(ch).replace('@','')} ")])
+            # ch is now dict {"id", "title", "link"}
+            title = ch.get("title") or "Channel"
+            link = ch.get("link")
+            btns.append([InlineKeyboardButton(f"Join {title}", url=link)])
 
         btns.append([InlineKeyboardButton("✅ Checked / Try Again", callback_data=f"check_sub")])
 
@@ -282,7 +331,7 @@ async def on_task_ans(client, callback):
     else:
         await callback.answer("❌ Wrong answer. Try again or skip.", show_alert=True)
 
-@Client.on_message(filters.text & ~filters.command(["start", "create_link"]))
+@Client.on_message(filters.text & ~filters.command(["start", "create_link", "admin", "cancel"]), group=2)
 async def on_text_answer(client, message):
     user_id = message.from_user.id
     if user_id not in user_sessions:

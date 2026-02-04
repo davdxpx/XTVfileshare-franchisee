@@ -126,11 +126,13 @@ async def on_media_type_select(client, callback):
         "Please send the **Title** to search on TMDb (e.g. 'The Rookie')."
     )
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link"]))
+from pyrogram import ContinuePropagation
+
+@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link", "admin", "start"]), group=1)
 async def on_text_input(client, message):
     user_id = message.from_user.id
     if user_id not in admin_states:
-        return
+        raise ContinuePropagation
 
     state = admin_states[user_id]
     step = state["step"]
@@ -198,7 +200,15 @@ async def on_text_input(client, message):
     elif step == "wait_manual_eps":
         # "1,3,5" or "1-5"
         state["data"]["bundle_episodes"] = message.text
-        # Proceed to Finalize
+        # Go to Quality (Series)
+        state["step"] = "wait_quality"
+        state["data"]["qualities"] = []
+        await show_quality_menu(message, [])
+
+    elif step == "wait_custom_title":
+        text = message.text
+        if text.strip() != "/skip":
+            state["data"]["custom_title"] = text
         await finalize_bundle(client, user_id, message)
 
 @Client.on_callback_query(filters.regex(r"^tmdb_"))
@@ -259,7 +269,10 @@ async def on_quality_toggle(client, callback):
     current_selected = admin_states[user_id]["data"]["qualities"]
 
     if data == "done":
-        await finalize_bundle(client, user_id, callback.message)
+        # Move to Title
+        admin_states[user_id]["step"] = "wait_custom_title"
+        await callback.message.delete()
+        await client.send_message(user_id, "📝 **Custom Title**\n\nEnter a custom title for this bundle, or send `/skip` to use default.")
         return
 
     if data in current_selected:
@@ -277,7 +290,11 @@ async def on_eps_select(client, callback):
 
     if mode == "all":
         admin_states[user_id]["data"]["bundle_episodes"] = "All"
-        await finalize_bundle(client, user_id, callback.message)
+        # Move to Quality selection (Series)
+        admin_states[user_id]["step"] = "wait_quality"
+        admin_states[user_id]["data"]["qualities"] = []
+        await show_quality_menu(callback, [])
+
     elif mode == "manual":
         admin_states[user_id]["step"] = "wait_manual_eps"
         await callback.edit_message_text("⌨️ **Enter Episodes:**\n\nExamples: `1-5` or `1,3,5`")
@@ -333,12 +350,21 @@ async def finalize_bundle(client, user_id, message_obj):
         # Generate Code
         code = generate_random_code()
 
+        # Title logic
+        bundle_title = data.get("custom_title")
+        if not bundle_title:
+             # Fallback
+             bundle_title = f"Bundle {code}"
+             # Or try to construct from TMDb if we had it stored?
+             # We didn't store TMDb title in 'data' explicitly, but we can perhaps leave it as code or generic.
+             # Ideally we should have stored TMDb title in state if we wanted to use it as default.
+
         # Save Bundle
         await db.create_bundle(
             code=code,
             file_ids=file_ids,
             source_channel=channel_id,
-            title=f"Bundle {code}", # Placeholder title, real info in metadata
+            title=bundle_title,
             original_range={"start": start_id, "end": end_id},
             # New Metadata
             tmdb_id=data.get("tmdb_id"),
