@@ -202,18 +202,32 @@ async def process_quest_step(client, user_id, chat_id):
         await client.send_message(chat_id, text, reply_markup=markup)
 
     elif stype == "share":
-        share_text = await db.get_config("force_share_text", "Check out this bot!")
+        share_link = await db.get_config("force_share_link", f"https://t.me/{Config.BOT_USERNAME}")
+        share_msg = await db.get_config("force_share_text", "Check this out!")
+
+        # Proper URL encoding manually or via urllib if needed, but pyrogram/tg usually handles basic params.
+        # Ideally import urllib.parse.quote
+        from urllib.parse import quote
+        safe_link = quote(share_link)
+        safe_text = quote(share_msg)
+
+        share_url = f"https://t.me/share/url?url={safe_link}&text={safe_text}"
+
         text = (
             f"**{header}**\n\n"
-            "🔄 **Force Share Required**\n"
-            "Please forward this message to 5 friends or groups, then **forward one of those messages back here** to verify!"
+            "🔄 **Force Share Required**\n\n"
+            "1. Click the **Share** button below.\n"
+            "2. Select friends or groups to send it to.\n"
+            "3. **Forward** the message you just sent **back to me**!"
         )
-        # We can't really enforce "5 friends". We just wait for a forward.
-        # Provide a share button for convenience
-        url = f"https://t.me/share/url?url={share_text}"
+
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("↗️ Share", url=url)]
+            [InlineKeyboardButton("↗️ Share to Friends", url=share_url)]
         ])
+
+        # Log for debug
+        logger.info(f"Showing Share Step to {user_id}. URL: {share_url}")
+
         await client.send_message(chat_id, text, reply_markup=markup)
 
 # --- Handlers ---

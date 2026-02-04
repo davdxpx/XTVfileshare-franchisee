@@ -94,7 +94,7 @@ async def show_settings(client, callback):
         ],
         [
             InlineKeyboardButton(share_text, callback_data="toggle_share_panel"),
-            InlineKeyboardButton("📝 Set Share Text", callback_data="set_share_text")
+            InlineKeyboardButton("📝 Set Share Config", callback_data="set_share_config")
         ],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
@@ -116,15 +116,15 @@ async def toggle_setting_panel(client, callback):
 
     await show_settings(client, callback)
 
-@Client.on_callback_query(filters.regex(r"^set_share_text$"))
-async def set_share_text_start(client, callback):
-    panel_states[callback.from_user.id] = "wait_share_text"
+@Client.on_callback_query(filters.regex(r"^set_share_config$"))
+async def set_share_config_start(client, callback):
+    panel_states[callback.from_user.id] = "wait_share_link"
     await callback.message.delete()
     await client.send_message(
         callback.from_user.id,
-        "**📝 Set Share Text**\n\n"
-        "Send the text or link that users should share.\n"
-        "(e.g. `https://t.me/mybot` or `Check this out!`)"
+        "**📝 Set Share Link**\n\n"
+        "First, send the **Link** (Channel/Group/Bot) that users should share.\n"
+        "Example: `https://t.me/mychannel`"
     )
 
 # --- Channels (Storage) ---
@@ -379,9 +379,30 @@ async def handle_panel_input(client, message):
         await show_main_menu(message)
         return
 
-    if state_key == "wait_share_text":
-        await db.update_config("force_share_text", message.text)
-        await message.reply(f"✅ Share text updated.")
+    if state_key == "wait_share_link":
+        link = message.text.strip()
+        # Basic validation
+        if not link.startswith("http") and not link.startswith("t.me"):
+             await message.reply("⚠️ Warning: Link should start with http or t.me. Proceeding anyway.")
+
+        # Save partially or just pass to next step?
+        # Update state to wait for text
+        panel_states[user_id] = {"state": "wait_share_text_final", "link": link}
+        await message.reply(
+            "✅ Link saved.\n\n"
+            "**Now send the Text message** that accompanies the link:\n"
+            "Example: `Hey, check out this cool bot!`"
+        )
+        return
+
+    if state_key == "wait_share_text_final":
+        text = message.text
+        link = raw_state["link"]
+
+        await db.update_config("force_share_link", link)
+        await db.update_config("force_share_text", text)
+
+        await message.reply(f"✅ **Force Share Configured!**\n\nLink: `{link}`\nText: `{text}`")
         del panel_states[user_id]
         await show_main_menu(message)
         return
