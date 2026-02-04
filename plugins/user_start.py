@@ -326,7 +326,18 @@ async def share_check_handler(client, message):
     step = session["quest"]["steps"][idx]
 
     if step["type"] == "share":
-        # Any forward is accepted
+        # Verification Logic
+        # Reject Channel/Group forwards
+        if message.forward_from_chat:
+            ftype = message.forward_from_chat.type
+            if ftype in ["channel", "supergroup", "group"]:
+                await message.reply("❌ Please forward a message from a **private chat** (friend/contact), not a channel or group.")
+                return
+
+        # Accept User forwards (forward_from) or Hidden forwards (neither from_chat nor from)
+        # Hidden forward usually has empty info but is still a forward object?
+        # Pyrogram 'filters.forwarded' ensures message.forward_date is present.
+
         await message.reply("✅ Share verified!")
         session["quest"]["current_index"] += 1
         await process_quest_step(client, user_id, message.chat.id)

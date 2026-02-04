@@ -35,6 +35,9 @@ async def show_main_menu(message_or_callback):
             InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks")
         ],
         [
+            InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")
+        ],
+        [
             InlineKeyboardButton("❌ Close", callback_data="admin_close")
         ]
     ])
@@ -95,7 +98,6 @@ async def show_settings(client, callback):
         [
             InlineKeyboardButton(share_text, callback_data="toggle_share_panel")
         ],
-        [InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
 
@@ -147,6 +149,13 @@ async def add_share_start(client, callback):
         "1. Send the **Link** you want users to share.\n"
         "(e.g. `https://t.me/mychannel`)"
     )
+
+@Client.on_callback_query(filters.regex(r"^del_share\|"))
+async def delete_share_channel(client, callback):
+    link = callback.data.split("|")[1]
+    await db.remove_share_channel(link)
+    await callback.answer("Removed!", show_alert=True)
+    await show_share_channels(client, callback)
 
 @Client.on_callback_query(filters.regex(r"^view_share\|"))
 async def view_share_channel(client, callback):
@@ -428,7 +437,8 @@ async def handle_panel_input(client, message):
         await message.reply(
             "✅ Link saved.\n\n"
             "**Now send the Text message** that accompanies the link:\n"
-            "Example: `Hey, check out this cool bot!`"
+            "👉 Use `{channel_link}` as a placeholder for the link.\n\n"
+            "Example: `Hey, check this out: {channel_link}`"
         )
         return
 
