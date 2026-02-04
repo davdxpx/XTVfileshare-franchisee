@@ -181,11 +181,50 @@ async def deliver_bundle(client, user_id, chat_id, code):
                 if quals:
                     content_info = f"Quality: {', '.join(quals)}"
 
+            # Format Info Message
+            # Use <i> for italics for cleaner look or __ for Markdown
+            # Pyrogram default is Markdown.
+
+            rating = details.get("vote_average", 0)
+            genres = [g["name"] for g in details.get("genres", [])[:3]]
+            genre_text = ", ".join(genres)
+
+            # Size Calculation
+            total_size = sum(f.get("file_size", 0) for f in files)
+            size_gb = total_size / (1024 * 1024 * 1024)
+            size_text = f"{size_gb:.2f} GB" if size_gb >= 1 else f"{total_size / (1024 * 1024):.2f} MB"
+
+            # Content Info formatting
+            meta_lines = []
+            if rating:
+                meta_lines.append(f"⭐️ {round(rating, 1)}/10  🎭 {genre_text}")
+
+            if media_type == "tv" or media_type == "subs":
+                season = bundle.get("season")
+                eps = bundle.get("episodes_label")
+                if season and eps:
+                    ep_text = "Complete" if eps == "All" else f"Episodes {eps}"
+                    meta_lines.append(f"📺 **Season {season}** • **{ep_text}**")
+
+            quals = bundle.get("qualities", [])
+            if quals:
+                meta_lines.append(f"💿 **Quality:** {', '.join(quals)}")
+
+            meta_lines.append(f"💾 **Size:** {size_text}")
+
+            meta_block = "\n".join(meta_lines)
+
+            # Description Quote
+            # Add > to every line
+            desc_lines = overview.split("\n")
+            quoted_desc = "\n".join([f"> {line}" for line in desc_lines if line.strip()])
+
             caption = (
-                f"<u>**{title}**</u> • _({year})_\n\n"
-                f"{content_info}\n\n"
-                f"💬 **Description:**\n"
-                f"> {overview}"
+                f"<u>**{title}**</u> • _({year})_\n"
+                f"{meta_block}\n\n"
+                f"**💬 Description:**\n"
+                f"{quoted_desc}\n\n"
+                f"__Enjoy watching!__ 🍿"
             )
 
             try:
@@ -195,7 +234,15 @@ async def deliver_bundle(client, user_id, chat_id, code):
                     await client.send_message(chat_id, caption)
             except Exception as e:
                 logger.error(f"Failed to send info message: {e}")
-                await client.send_message(chat_id, caption) # Fallback text only
+                # Fallback if caption too long?
+                if "caption is too long" in str(e).lower():
+                    caption = caption[:1000] + "... (truncated)"
+                    try:
+                        await client.send_photo(chat_id, poster_url, caption=caption)
+                    except:
+                        await client.send_message(chat_id, caption)
+                else:
+                    await client.send_message(chat_id, caption)
 
     # --- Send Files ---
     files = bundle["file_ids"]
