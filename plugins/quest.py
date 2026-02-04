@@ -45,25 +45,39 @@ class QuestEngine:
             for ch in all_fs:
                 chat_id = ch["chat_id"]
                 try:
-                    # Try to refresh peer if needed
+                    # Refresh peer cache to prevent PeerIdInvalid
                     try:
                         await client.get_chat(chat_id)
                     except: pass
 
                     member = await client.get_chat_member(chat_id, user_id)
-                    # Only add if NOT a member
+
+                    # Logic: Only add if definitely NOT a member
+                    # Statuses that imply membership: creator, administrator, member, restricted (usually still in chat)
+                    # Statuses that imply NOT member: left, kicked, banned
                     if member.status in ["left", "kicked", "banned"]:
                         missing.append(ch)
+                    # Else: User IS member, so SKIP (do not add to missing)
+
                 except Exception as e:
-                    # If we can't verify (e.g. PeerIdInvalid despite refresh), we should probably assume "Missing" to be safe?
-                    # User requested: "checken ob ich in all den mitgliedern ob ich da drin bin"
-                    # If we assume missing, we show the join button.
-                    # If user IS member but bot fails to see it, they are stuck.
-                    # Given the "Secure Bot" requirement, we usually fail closed (assume missing).
-                    # But for "PeerIdInvalid" specifically, if we assume missing, user sees "Join".
-                    # When they click "I Joined", we check again. If it still fails, loop.
-                    # We need to trust the process or log it.
-                    # Let's assume missing.
+                    # Robustness: If check FAILS (e.g. bot not admin, or API error), what to do?
+                    # If we add to missing, user gets stuck if they ARE member but bot can't see it.
+                    # If we skip, we bypass security.
+                    # However, if PeerIdInvalid persists, it usually means bot is NOT in the channel or admin.
+                    # If bot is not in channel, it CANNOT verify.
+                    # So adding it to "missing" forces user to click link.
+                    # But verification step will also fail?
+                    # User requirement: "das muss er unbedingt schon vorher beim erstellen halt aufteilen... wenn es keine force channels mehr gibt... punkte wo anders aufteilen"
+                    # This implies correct filtering is paramount.
+
+                    # Log warning
+                    logger.warning(f"Quest Sub Check Failed {chat_id}: {e}")
+
+                    # If we assume missing, we must ensure verification step can recover.
+                    # But if `get_chat_member` fails here, it will likely fail in verification too.
+                    # Recommendation: If we can't verify, we should probably SKIP it to avoid blocking the user indefinitely?
+                    # Or assume missing but treat verification leniently?
+                    # Let's assume MISSING (Secure), but we rely on the verification step to maybe work (user joining might fix visibility).
                     missing.append(ch)
 
             # Select channels to fill points
