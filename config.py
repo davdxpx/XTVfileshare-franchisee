@@ -22,3 +22,6 @@ class Config:
 
     # Bot Username (will be set on startup)
     BOT_USERNAME = ""
+
+    # Bot Version
+    BOT_VERSION = "1.6.2"
