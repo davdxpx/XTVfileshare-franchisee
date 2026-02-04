@@ -24,4 +24,4 @@ class Config:
     BOT_USERNAME = ""
 
     # Bot Version
-    BOT_VERSION = "1.6.2"
+    BOT_VERSION = "1.6.7"
