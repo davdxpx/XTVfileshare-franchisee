@@ -84,27 +84,48 @@ async def show_settings(client, callback):
     fs_text = "✅ Force Sub" if fs_enabled else "❌ Force Sub"
     task_text = "✅ Tasks" if tasks_enabled else "❌ Tasks"
 
+    share_enabled = await db.get_config("force_share_enabled", False)
+    share_text = "✅ Force Share" if share_enabled else "❌ Force Share"
+
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(fs_text, callback_data="toggle_fs_panel"),
             InlineKeyboardButton(task_text, callback_data="toggle_task_panel")
+        ],
+        [
+            InlineKeyboardButton(share_text, callback_data="toggle_share_panel"),
+            InlineKeyboardButton("📝 Set Share Text", callback_data="set_share_text")
         ],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
 
     await callback.edit_message_text("**⚙️ Settings**\nToggle features below:", reply_markup=markup)
 
-@Client.on_callback_query(filters.regex(r"^toggle_(fs|task)_panel$"))
+@Client.on_callback_query(filters.regex(r"^toggle_(fs|task|share)_panel$"))
 async def toggle_setting_panel(client, callback):
-    setting = callback.data.split("_")[1] # fs or task
+    setting = callback.data.split("_")[1] # fs, task, share
     if setting == "fs":
         curr = await db.get_config("force_sub_enabled", False)
         await db.update_config("force_sub_enabled", not curr)
     elif setting == "task":
         curr = await db.get_config("tasks_enabled", False)
         await db.update_config("tasks_enabled", not curr)
+    elif setting == "share":
+        curr = await db.get_config("force_share_enabled", False)
+        await db.update_config("force_share_enabled", not curr)
 
     await show_settings(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^set_share_text$"))
+async def set_share_text_start(client, callback):
+    panel_states[callback.from_user.id] = "wait_share_text"
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        "**📝 Set Share Text**\n\n"
+        "Send the text or link that users should share.\n"
+        "(e.g. `https://t.me/mybot` or `Check this out!`)"
+    )
 
 # --- Channels (Storage) ---
 
@@ -354,6 +375,13 @@ async def handle_panel_input(client, message):
         new_title = message.text
         await db.update_bundle_title(code, new_title)
         await message.reply(f"✅ Bundle renamed to: `{new_title}`")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_share_text":
+        await db.update_config("force_share_text", message.text)
+        await message.reply(f"✅ Share text updated.")
         del panel_states[user_id]
         await show_main_menu(message)
         return
