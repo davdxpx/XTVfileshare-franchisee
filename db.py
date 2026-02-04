@@ -98,6 +98,9 @@ class Database:
     async def increment_bundle_views(self, code):
         await self.bundles_col.update_one({"code": code}, {"$inc": {"views": 1}})
 
+    async def update_bundle_title(self, code, new_title):
+        await self.bundles_col.update_one({"code": code}, {"$set": {"title": new_title}})
+
     async def delete_bundle(self, code):
         await self.bundles_col.delete_one({"code": code})
 

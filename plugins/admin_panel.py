@@ -188,48 +188,67 @@ async def show_bundles(client, callback):
     text = f"**📦 Bundles**\n\nTotal Created: {len(bundles)}\n\nManage your bundles below."
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Create New Link", callback_data="start_create_link")],
-        [InlineKeyboardButton("🗑 Delete Bundle", callback_data="panel_del_bundle_menu")],
+        [InlineKeyboardButton("✏️ Manage Bundles", callback_data="panel_manage_bundles")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
     await callback.edit_message_text(text, reply_markup=markup)
 
-@Client.on_callback_query(filters.regex(r"^panel_del_bundle_menu$"))
-async def delete_bundle_menu(client, callback):
-    text = "**🗑 Delete Bundle**\n\nSelect a method:"
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("List & Select (Recent)", callback_data="panel_list_del_bundles")],
-        # Could add "Enter Code" later if needed
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_bundles")]
-    ])
-    await callback.edit_message_text(text, reply_markup=markup)
-
-@Client.on_callback_query(filters.regex(r"^panel_list_del_bundles$"))
-async def list_del_bundles(client, callback):
+@Client.on_callback_query(filters.regex(r"^panel_manage_bundles$"))
+async def manage_bundles_menu(client, callback):
     bundles = await db.get_all_bundles()
     if not bundles:
         await callback.answer("No bundles found.", show_alert=True)
         return
 
-    # Sort by created_at desc if available, or just reverse list (assuming insertion order)
-    # Most recent first
+    # Sort recent
     recent = list(reversed(bundles))[:10]
 
     markup = []
     for b in recent:
-        title = b.get("title", "Untitled")[:20]
+        title = b.get("title", "Untitled")[:25]
         code = b.get("code")
-        markup.append([InlineKeyboardButton(f"🗑 {title} ({code})", callback_data=f"do_del_bund|{code}")])
+        markup.append([InlineKeyboardButton(f"{title} ({code})", callback_data=f"manage_bund|{code}")])
 
-    markup.append([InlineKeyboardButton("🔙 Back", callback_data="panel_del_bundle_menu")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_bundles")])
 
-    await callback.edit_message_text("**Select Bundle to Delete:**", reply_markup=InlineKeyboardMarkup(markup))
+    await callback.edit_message_text("**Select Bundle to Manage:**", reply_markup=InlineKeyboardMarkup(markup))
 
-@Client.on_callback_query(filters.regex(r"^do_del_bund\|"))
-async def do_delete_bundle(client, callback):
+@Client.on_callback_query(filters.regex(r"^manage_bund\|"))
+async def manage_single_bundle(client, callback):
+    code = callback.data.split("|")[1]
+    bundle = await db.get_bundle(code)
+    if not bundle:
+        await callback.answer("Bundle not found.", show_alert=True)
+        await manage_bundles_menu(client, callback)
+        return
+
+    title = bundle.get("title", "Untitled")
+    views = bundle.get("views", 0)
+
+    text = f"**📦 Bundle Info**\n\nTitle: `{title}`\nCode: `{code}`\nViews: `{views}`"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Rename", callback_data=f"rename_bund|{code}")],
+        [InlineKeyboardButton("🗑 Delete", callback_data=f"del_bund_confirm|{code}")],
+        [InlineKeyboardButton("🔙 Back", callback_data="panel_manage_bundles")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^del_bund_confirm\|"))
+async def del_bund_confirm(client, callback):
     code = callback.data.split("|")[1]
     await db.delete_bundle(code)
-    await callback.answer(f"Bundle {code} deleted!", show_alert=True)
-    await list_del_bundles(client, callback)
+    await callback.answer("Bundle deleted!", show_alert=True)
+    await manage_bundles_menu(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^rename_bund\|"))
+async def rename_bund_start(client, callback):
+    code = callback.data.split("|")[1]
+    panel_states[callback.from_user.id] = {"state": "wait_bundle_rename", "code": code}
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        f"**✏️ Rename Bundle**\n\nCode: `{code}`\n\nEnter new title (or /cancel):"
+    )
 
 @Client.on_callback_query(filters.regex(r"^start_create_link$"))
 async def start_create_link_panel(client, callback):
@@ -324,13 +343,22 @@ from pyrogram import ContinuePropagation
 async def handle_panel_input(client, message):
     user_id = message.from_user.id
     if user_id not in panel_states:
-        # Important: If not in state, do not stop propagation!
-        # This allows user_start.py's text handler to pick it up if it's a task answer.
         raise ContinuePropagation
 
-    state = panel_states[user_id]
+    # Check if state is dict (complex state) or str (legacy simple state)
+    raw_state = panel_states[user_id]
+    state_key = raw_state if isinstance(raw_state, str) else raw_state.get("state")
 
-    if state == "wait_fs_input":
+    if state_key == "wait_bundle_rename":
+        code = raw_state["code"]
+        new_title = message.text
+        await db.update_bundle_title(code, new_title)
+        await message.reply(f"✅ Bundle renamed to: `{new_title}`")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_fs_input":
         text = message.text
         chat_id = None
 
@@ -368,10 +396,8 @@ async def handle_panel_input(client, message):
         except Exception as e:
             await message.reply(f"❌ Error adding channel: {e}")
 
-    elif state == "wait_task_input":
+    elif state_key == "wait_task_input":
         text = message.text
-        # Re-use single processing logic for consistency or keep separate
-        # Just simple copy here
         parts = [p.strip() for p in text.split("|")]
 
         if len(parts) < 2:
@@ -394,9 +420,8 @@ async def handle_panel_input(client, message):
         del panel_states[user_id]
         await show_main_menu(message)
 
-    elif state == "wait_bulk_task_input":
+    elif state_key == "wait_bulk_task_input":
         text = message.text
-        # Handle entities/formatting? Pyrogram message.text is usually plain text unless we access message.text.markdown/html
         # Using raw text is safer for splitting.
         lines = text.split("\n")
         added = 0
