@@ -41,15 +41,34 @@ async def check_force_sub(client, user_id):
         chat_id = ch["chat_id"]
         invite = ch.get("invite_link")
         try:
+            # Try getting chat member
             member = await client.get_chat_member(chat_id, user_id)
             if member.status in ["left", "kicked", "banned"]:
                 missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
         except UserNotParticipant:
              missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
         except Exception as e:
-             logger.warning(f"FS Check Error {chat_id}: {e}")
-             # If bot is not admin, it fails here.
-             pass
+             # Handle PeerIdInvalid specifically by trying to refresh peer
+             if "Peer id invalid" in str(e) or "PEER_ID_INVALID" in str(e):
+                 try:
+                     # Refresh cache
+                     await client.get_chat(chat_id)
+                     # Retry once
+                     member = await client.get_chat_member(chat_id, user_id)
+                     if member.status in ["left", "kicked", "banned"]:
+                        missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
+                 except Exception as e2:
+                     logger.warning(f"FS Check Retry Failed {chat_id}: {e2}")
+                     # If we still can't check, we skip adding to missing (fail open) OR add to missing (fail closed)?
+                     # Since this is "Secure Bot", failing closed is safer, but if bot is broken, user is stuck.
+                     # User said "obwohl es davor funktioniert hat" -> imply it should work.
+                     # If we can't verify, we assume user is NOT in channel if we want to be strict.
+                     # But without a working link, they can't join.
+                     # Let's add to missing so they see the link (if available).
+                     missing_channels.append({"id": chat_id, "title": ch.get("title"), "link": invite or f"https://t.me/{ch.get('username')}"})
+             else:
+                 logger.warning(f"FS Check Error {chat_id}: {e}")
+                 pass
 
     return len(missing_channels) == 0, missing_channels
 
@@ -146,6 +165,8 @@ async def deliver_bundle(client, user_id, chat_id, code):
     allowed, req_count = await db.check_rate_limit(user_id)
     await db.add_request(user_id)
     await db.increment_bundle_views(code)
+
+    files = bundle["file_ids"]
 
     # --- Fetch & Send Metadata Info ---
     tmdb_id = bundle.get("tmdb_id")
@@ -245,7 +266,7 @@ async def deliver_bundle(client, user_id, chat_id, code):
                     await client.send_message(chat_id, caption)
 
     # --- Send Files ---
-    files = bundle["file_ids"]
+    # files already defined above
     status_msg = await client.send_message(chat_id, f"✅ Verified! Sending {len(files)} files...")
 
     for file_data in files:
