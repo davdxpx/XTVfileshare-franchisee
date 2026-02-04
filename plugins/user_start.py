@@ -207,25 +207,22 @@ async def process_quest_step(client, user_id, chat_id):
         share_link = share_data.get("link") or f"https://t.me/{Config.BOT_USERNAME}"
         raw_text = share_data.get("text") or "Check this out! {channel_link}"
 
-        # Replace placeholder
         final_text = raw_text.replace("{channel_link}", share_link)
 
         from urllib.parse import quote
-        # User requested: "link inside text", so we put everything in 'text' param and leave 'url' empty?
-        # Standard: t.me/share/url?text=...
         safe_text = quote(final_text)
         share_url = f"https://t.me/share/url?text={safe_text}"
 
         text = (
             f"**{header}**\n\n"
             "🔄 **Force Share Required**\n\n"
-            "1. Click the **Share** button below.\n"
-            "2. Select friends or groups to send it to.\n"
-            "3. **Forward** the message you just sent **back to me**!"
+            "1. Click the **Share** button below and send to 5 contacts.\n"
+            "2. Click **Verify** when done."
         )
 
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("↗️ Share to Friends", url=share_url)]
+            [InlineKeyboardButton("↗️ Share to Friends", url=share_url)],
+            [InlineKeyboardButton("✅ Verify", callback_data="share_verify_fake")]
         ])
 
         await client.send_message(chat_id, text, reply_markup=markup)
@@ -301,6 +298,10 @@ async def sub_check_handler(client, callback):
 
     ch_id = step["channel"]["id"]
     try:
+        # Robust check
+        try: await client.get_chat(ch_id)
+        except: pass
+
         member = await client.get_chat_member(ch_id, user_id)
         if member.status not in ["left", "kicked", "banned"]:
             # Success
@@ -312,41 +313,26 @@ async def sub_check_handler(client, callback):
     except Exception as e:
         logger.warning(f"Sub check fail: {e}")
 
-    await callback.answer("❌ You are not in the channel yet!", show_alert=True)
+    await callback.answer("❌ You are not in the channel yet! (Or bot cannot verify)", show_alert=True)
 
-@Client.on_message(filters.forwarded & ~filters.user(Config.ADMIN_ID), group=2)
-async def share_check_handler(client, message):
-    user_id = message.from_user.id
+@Client.on_callback_query(filters.regex(r"^share_verify_fake$"))
+async def share_verify_fake(client, callback):
+    user_id = callback.from_user.id
     if user_id not in user_sessions: return
 
+    # Show loading state
+    try:
+        await callback.edit_message_reply_markup(
+            InlineKeyboardMarkup([[InlineKeyboardButton("⏳ Verifying...", callback_data="noop")]])
+        )
+    except: pass
+
+    # Fake Check delay
+    await asyncio.sleep(10)
+
+    # Success
     session = user_sessions[user_id]
-    idx = session["quest"]["current_index"]
-    if idx >= len(session["quest"]["steps"]): return
+    session["quest"]["current_index"] += 1
 
-    step = session["quest"]["steps"][idx]
-
-    if step["type"] == "share":
-        # Verification Logic
-        # Reject Channel/Group forwards
-        if message.forward_from_chat:
-            ftype = message.forward_from_chat.type
-            if ftype in ["channel", "supergroup", "group"]:
-                await message.reply("❌ Please forward a message from a **private chat** (friend/contact), not a channel or group.")
-                return
-
-        # Accept User forwards (forward_from) or Hidden forwards (neither from_chat nor from)
-        # Hidden forward usually has empty info but is still a forward object?
-        # Pyrogram 'filters.forwarded' ensures message.forward_date is present.
-
-        await message.reply("✅ Share verified!")
-        session["quest"]["current_index"] += 1
-        await process_quest_step(client, user_id, message.chat.id)
-
-# Separate handler for Admin to ensure it works even if admin panel logic interferes?
-# Actually, the problem might be that for Admin, the 'group=1' handler in admin_bundles/panel catches it?
-# We added ContinuePropagation there.
-# Let's add a specific debug or explicit handler for admin forward in share context.
-@Client.on_message(filters.forwarded & filters.user(Config.ADMIN_ID), group=2)
-async def share_check_handler_admin(client, message):
-    # Same logic
-    await share_check_handler(client, message)
+    await callback.edit_message_text("✅ **Share Verified!**")
+    await process_quest_step(client, user_id, callback.message.chat.id)
