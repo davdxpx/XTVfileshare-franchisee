@@ -125,6 +125,20 @@ class Database:
     async def delete_task(self, question):
         await self.tasks_col.delete_one({"question": question})
 
+    # --- Force Share Channels ---
+    async def add_share_channel(self, link, text_template):
+        await self.db.force_shares.insert_one({
+            "link": link,
+            "text": text_template,
+            "created_at": time.time()
+        })
+
+    async def get_share_channels(self):
+        return await self.db.force_shares.find({}).to_list(length=100)
+
+    async def remove_share_channel(self, link):
+        await self.db.force_shares.delete_one({"link": link})
+
     # --- Rate Limit ---
     async def check_rate_limit(self, user_id):
         user = await self.users_col.find_one({"user_id": user_id})

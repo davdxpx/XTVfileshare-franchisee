@@ -93,9 +93,9 @@ async def show_settings(client, callback):
             InlineKeyboardButton(task_text, callback_data="toggle_task_panel")
         ],
         [
-            InlineKeyboardButton(share_text, callback_data="toggle_share_panel"),
-            InlineKeyboardButton("📝 Set Share Config", callback_data="set_share_config")
+            InlineKeyboardButton(share_text, callback_data="toggle_share_panel")
         ],
+        [InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
 
@@ -116,16 +116,53 @@ async def toggle_setting_panel(client, callback):
 
     await show_settings(client, callback)
 
-@Client.on_callback_query(filters.regex(r"^set_share_config$"))
-async def set_share_config_start(client, callback):
+# --- Force Share Channels ---
+
+@Client.on_callback_query(filters.regex(r"^admin_share_channels$"))
+async def show_share_channels(client, callback):
+    channels = await db.get_share_channels()
+
+    markup = []
+    if channels:
+        for ch in channels:
+            link = ch.get("link", "Link")
+            markup.append([
+                InlineKeyboardButton(f"{link[:20]}...", callback_data=f"view_share|{link}")
+            ])
+    else:
+        markup.append([InlineKeyboardButton("No Share Channels.", callback_data="noop")])
+
+    markup.append([InlineKeyboardButton("➕ Add Share Channel", callback_data="add_share_start")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_main")])
+
+    await callback.edit_message_text("**📢 Force-Share Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
+
+@Client.on_callback_query(filters.regex(r"^add_share_start$"))
+async def add_share_start(client, callback):
     panel_states[callback.from_user.id] = "wait_share_link"
     await callback.message.delete()
     await client.send_message(
         callback.from_user.id,
-        "**📝 Set Share Link**\n\n"
-        "First, send the **Link** (Channel/Group/Bot) that users should share.\n"
-        "Example: `https://t.me/mychannel`"
+        "**➕ Add Share Channel**\n\n"
+        "1. Send the **Link** you want users to share.\n"
+        "(e.g. `https://t.me/mychannel`)"
     )
+
+@Client.on_callback_query(filters.regex(r"^view_share\|"))
+async def view_share_channel(client, callback):
+    link = callback.data.split("|")[1]
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 Remove", callback_data=f"del_share|{link}")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_share_channels")]
+    ])
+    await callback.edit_message_text(f"**Share Channel**\n\nLink: `{link}`", reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^del_share\|"))
+async def delete_share_channel(client, callback):
+    link = callback.data.split("|")[1]
+    await db.remove_share_channel(link)
+    await callback.answer("Removed!", show_alert=True)
+    await show_share_channels(client, callback)
 
 # --- Channels (Storage) ---
 
@@ -399,10 +436,10 @@ async def handle_panel_input(client, message):
         text = message.text
         link = raw_state["link"]
 
-        await db.update_config("force_share_link", link)
-        await db.update_config("force_share_text", text)
+        # Add to collection
+        await db.add_share_channel(link, text)
 
-        await message.reply(f"✅ **Force Share Configured!**\n\nLink: `{link}`\nText: `{text}`")
+        await message.reply(f"✅ **Share Channel Added!**\n\nLink: `{link}`\nText: `{text}`")
         del panel_states[user_id]
         await show_main_menu(message)
         return
