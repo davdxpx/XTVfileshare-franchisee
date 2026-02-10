@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pyrogram import Client, idle
 from config import Config
 from db import db
@@ -24,6 +25,9 @@ async def seed_tasks():
         logger.info("Seeding complete.")
 
 async def main():
+    # Set Start Time
+    Config.START_TIME = time.time()
+
     # Connect to Database
     db.connect()
 
