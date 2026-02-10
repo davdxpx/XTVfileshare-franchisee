@@ -2,15 +2,9 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import Config
 from db import db
-from plugins.admin_bundles import admin_states # Re-use state management if possible, or create shared one
+from pyrogram import ContinuePropagation
 
-# Shared state for admin inputs (move to a shared file if needed, but for now accessing directly or redefining)
-# Ideally, we should move admin_states to a shared module.
-# For now, let's assume we can import it or define a local one if the other is strictly local.
-# Looking at plugins/admin_bundles.py, admin_states is a global dict.
-# We should probably refactor `admin_states` to `utils.py` or a new `state.py` to be clean.
-# But to avoid breaking changes right now, I will import it if I can, or use a new one for panel actions.
-# Let's use a new dict for panel specific inputs to be safe.
+# Shared state for admin inputs
 panel_states = {}
 
 # --- Main Admin Panel ---
@@ -24,20 +18,18 @@ async def show_main_menu(message_or_callback):
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")
+            InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings_menu")
         ],
         [
-            InlineKeyboardButton("📢 DB Channels", callback_data="admin_channels"),
-            InlineKeyboardButton("🔒 Force-Subs", callback_data="admin_force_subs")
+            InlineKeyboardButton("💰 Monetization", callback_data="admin_monetization"),
+            InlineKeyboardButton("🚀 Community Growth", callback_data="admin_growth")
         ],
         [
             InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles"),
-            InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks")
+            InlineKeyboardButton("📢 Channels", callback_data="admin_channels_menu")
         ],
         [
-            InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")
-        ],
-        [
+            InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks"),
             InlineKeyboardButton("❌ Close", callback_data="admin_close")
         ]
     ])
@@ -77,17 +69,39 @@ async def show_stats(client, callback):
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_main")]])
     await callback.edit_message_text(text, reply_markup=markup)
 
-# --- Settings ---
+# --- Channels Menu (Storage, Force Subs, Share) ---
 
-@Client.on_callback_query(filters.regex(r"^admin_settings$"))
-async def show_settings(client, callback):
+@Client.on_callback_query(filters.regex(r"^admin_channels_menu$"))
+async def admin_channels_menu(client, callback):
+    text = "**📢 Channel Management**"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗄️ DB Channels (Storage)", callback_data="admin_channels")],
+        [InlineKeyboardButton("🔒 Force-Sub Channels", callback_data="admin_force_subs")],
+        [InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+# --- Settings Menu ---
+
+@Client.on_callback_query(filters.regex(r"^admin_settings_menu$"))
+async def admin_settings_menu(client, callback):
+    text = "**⚙️ Settings**"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛠️ General Config", callback_data="admin_settings_general")],
+        [InlineKeyboardButton("🛡️ Anti-Leech Config", callback_data="admin_settings_leech")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^admin_settings_general$"))
+async def admin_settings_general(client, callback):
     fs_enabled = await db.get_config("force_sub_enabled", False)
     tasks_enabled = await db.get_config("tasks_enabled", False)
+    share_enabled = await db.get_config("force_share_enabled", False)
 
     fs_text = "✅ Force Sub" if fs_enabled else "❌ Force Sub"
     task_text = "✅ Tasks" if tasks_enabled else "❌ Tasks"
-
-    share_enabled = await db.get_config("force_share_enabled", False)
     share_text = "✅ Force Share" if share_enabled else "❌ Force Share"
 
     markup = InlineKeyboardMarkup([
@@ -95,17 +109,14 @@ async def show_settings(client, callback):
             InlineKeyboardButton(fs_text, callback_data="toggle_fs_panel"),
             InlineKeyboardButton(task_text, callback_data="toggle_task_panel")
         ],
-        [
-            InlineKeyboardButton(share_text, callback_data="toggle_share_panel")
-        ],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
+        [InlineKeyboardButton(share_text, callback_data="toggle_share_panel")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_settings_menu")]
     ])
-
-    await callback.edit_message_text("**⚙️ Settings**\nToggle features below:", reply_markup=markup)
+    await callback.edit_message_text("**🛠️ General Config**\nToggle features:", reply_markup=markup)
 
 @Client.on_callback_query(filters.regex(r"^toggle_(fs|task|share)_panel$"))
 async def toggle_setting_panel(client, callback):
-    setting = callback.data.split("_")[1] # fs, task, share
+    setting = callback.data.split("_")[1]
     if setting == "fs":
         curr = await db.get_config("force_sub_enabled", False)
         await db.update_config("force_sub_enabled", not curr)
@@ -115,8 +126,113 @@ async def toggle_setting_panel(client, callback):
     elif setting == "share":
         curr = await db.get_config("force_share_enabled", False)
         await db.update_config("force_share_enabled", not curr)
+    await admin_settings_general(client, callback)
 
-    await show_settings(client, callback)
+@Client.on_callback_query(filters.regex(r"^admin_settings_leech$"))
+async def admin_settings_leech(client, callback):
+    curr = await db.get_config("auto_delete_time", 0)
+    text = f"**🛡️ Anti-Leech (Auto-Delete)**\n\nCurrent: `{curr} minutes` (0 = Disabled)"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Set Time", callback_data="set_autodel_time")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_settings_menu")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^set_autodel_time$"))
+async def set_autodel_time(client, callback):
+    panel_states[callback.from_user.id] = "wait_autodel_input"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**🛡️ Set Auto-Delete Time**\n\nEnter minutes (0 to disable):")
+
+# --- Monetization ---
+
+@Client.on_callback_query(filters.regex(r"^admin_monetization$"))
+async def admin_monetization(client, callback):
+    text = "**💰 Monetization**"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌟 Manage Premium Users", callback_data="admin_premium_users")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^admin_premium_users$"))
+async def admin_premium_users(client, callback):
+    text = "**🌟 Premium Users Management**"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Premium User", callback_data="add_prem_user")],
+        [InlineKeyboardButton("➖ Remove Premium User", callback_data="rem_prem_user")],
+        [InlineKeyboardButton("📋 List Active", callback_data="list_prem_users")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_monetization")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^add_prem_user$"))
+async def add_prem_user(client, callback):
+    panel_states[callback.from_user.id] = "wait_prem_add_id"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**➕ Add Premium User**\n\nSend User ID:")
+
+@Client.on_callback_query(filters.regex(r"^rem_prem_user$"))
+async def rem_prem_user(client, callback):
+    panel_states[callback.from_user.id] = "wait_prem_rem_id"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**➖ Remove Premium User**\n\nSend User ID:")
+
+@Client.on_callback_query(filters.regex(r"^list_prem_users$"))
+async def list_prem_users(client, callback):
+    users = await db.get_premium_users()
+    if not users:
+        await callback.answer("No premium users.", show_alert=True)
+        return
+
+    out = "🌟 **Premium Users:**\n"
+    for u in users[:50]:
+        out += f"`{u['user_id']}` (Expires: {u.get('premium_expiry')})\n"
+
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, out)
+    await show_main_menu(client.send_message(callback.from_user.id, "Menu:"))
+
+# --- Community Growth ---
+
+@Client.on_callback_query(filters.regex(r"^admin_growth$"))
+async def admin_growth(client, callback):
+    text = "**🚀 Community Growth**"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 Referral Settings", callback_data="admin_referral_settings")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^admin_referral_settings$"))
+async def admin_referral_settings(client, callback):
+    target = await db.get_config("referral_target", 10)
+    hours = await db.get_config("referral_reward_hours", 24)
+
+    text = (
+        f"**🔗 Referral Settings**\n\n"
+        f"Target Invites: `{target}`\n"
+        f"Reward (Hours): `{hours}`"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Set Target", callback_data="set_ref_target")],
+        [InlineKeyboardButton("✏️ Set Reward Duration", callback_data="set_ref_reward")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_growth")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^set_ref_target$"))
+async def set_ref_target(client, callback):
+    panel_states[callback.from_user.id] = "wait_ref_target"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**Set Referral Target**\n\nHow many invites for reward?")
+
+@Client.on_callback_query(filters.regex(r"^set_ref_reward$"))
+async def set_ref_reward(client, callback):
+    panel_states[callback.from_user.id] = "wait_ref_reward"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**Set Reward Duration**\n\nHow many hours of Premium?")
+
 
 # --- Force Share Channels ---
 
@@ -135,7 +251,7 @@ async def show_share_channels(client, callback):
         markup.append([InlineKeyboardButton("No Share Channels.", callback_data="noop")])
 
     markup.append([InlineKeyboardButton("➕ Add Share Channel", callback_data="add_share_start")])
-    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_main")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")])
 
     await callback.edit_message_text("**📢 Force-Share Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
 
@@ -149,13 +265,6 @@ async def add_share_start(client, callback):
         "1. Send the **Link** you want users to share.\n"
         "(e.g. `https://t.me/mychannel`)"
     )
-
-@Client.on_callback_query(filters.regex(r"^del_share\|"))
-async def delete_share_channel(client, callback):
-    link = callback.data.split("|")[1]
-    await db.remove_share_channel(link)
-    await callback.answer("Removed!", show_alert=True)
-    await show_share_channels(client, callback)
 
 @Client.on_callback_query(filters.regex(r"^view_share\|"))
 async def view_share_channel(client, callback):
@@ -188,7 +297,7 @@ async def show_channels(client, callback):
     else:
         markup.append([InlineKeyboardButton("No channels found.", callback_data="noop")])
 
-    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_main")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")])
 
     await callback.edit_message_text("**📢 Storage Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
 
@@ -208,7 +317,7 @@ async def show_force_subs(client, callback):
         markup.append([InlineKeyboardButton("No FS channels.", callback_data="noop")])
 
     markup.append([InlineKeyboardButton("➕ Add Channel (Manual)", callback_data="panel_add_fs_manual")])
-    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_main")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")])
 
     await callback.edit_message_text("**🔒 Force Sub Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
 
@@ -218,21 +327,16 @@ async def view_channel(client, callback):
     # Need to fetch details? We have ID.
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑 Remove Channel", callback_data=f"del_ch|{chat_id}")],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_channels")]
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")]
     ])
     await callback.edit_message_text(f"**Channel Details**\nID: `{chat_id}`", reply_markup=markup)
 
 @Client.on_callback_query(filters.regex(r"^del_ch\|"))
 async def delete_channel(client, callback):
     chat_id = int(callback.data.split("|")[1])
-    # Determine type to return to correct menu? Or just go to main.
-    # We can check type before deleting if we want perfectly correct navigation,
-    # but removing and going back to main or trying to refresh current view is harder since we don't pass 'origin'.
-    # Let's try to detect based on what view we are in? No context.
-    # Just go back to main or try to guess.
-
     await db.remove_channel(chat_id)
     await callback.answer("Channel removed!", show_alert=True)
+    # Go back to main menu is safest as we don't know if it was FS or Storage easily here without querying
     await show_main_menu(callback)
 
 @Client.on_callback_query(filters.regex(r"^panel_add_fs_manual$"))
@@ -319,15 +423,8 @@ async def rename_bund_start(client, callback):
 
 @Client.on_callback_query(filters.regex(r"^start_create_link$"))
 async def start_create_link_panel(client, callback):
-    # We can trigger the existing command handler logic?
-    # Or just tell user what to do.
-    # The existing logic in admin_bundles.py uses `admin_states`.
-    # We can invoke it by sending a fake message or just replicating the state init.
-
     from plugins.admin_bundles import admin_states
-
     admin_states[callback.from_user.id] = {"step": "wait_start_msg", "data": {}}
-
     await callback.message.delete()
     await client.send_message(
         callback.from_user.id,
@@ -361,17 +458,14 @@ async def panel_list_tasks(client, callback):
     for t in tasks:
         opts = f" (Options: {', '.join(t.get('options', []))})" if t.get('options') else ""
         text += f"🔹 Q: {t['question']}\n   A: {t['answer']}{opts}\n\n"
-        if len(text) > 3500: break # Truncate for now
+        if len(text) > 3500: break
 
-    # We can't edit message with too long text usually, send new message?
-    # Or just edit if fits.
     try:
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_tasks")]])
         await callback.edit_message_text(text, reply_markup=markup)
     except:
         await callback.message.delete()
         await client.send_message(callback.from_user.id, text)
-        # Send menu again
         await show_main_menu(client.send_message(callback.from_user.id, "Menu:"))
 
 @Client.on_callback_query(filters.regex(r"^panel_add_task$"))
@@ -403,8 +497,7 @@ async def panel_bulk_add_task(client, callback):
         "Send /cancel to cancel."
     )
 
-# Use ContinuePropagation to allow other handlers to run if not in state
-from pyrogram import ContinuePropagation
+# --- Input Handlers ---
 
 @Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]), group=1)
 async def handle_panel_input(client, message):
@@ -412,10 +505,76 @@ async def handle_panel_input(client, message):
     if user_id not in panel_states:
         raise ContinuePropagation
 
-    # Check if state is dict (complex state) or str (legacy simple state)
     raw_state = panel_states[user_id]
     state_key = raw_state if isinstance(raw_state, str) else raw_state.get("state")
 
+    # New Handlers
+    if state_key == "wait_autodel_input":
+        try:
+            val = int(message.text.strip())
+            await db.update_config("auto_delete_time", val)
+            await message.reply(f"✅ Auto-Delete set to {val} mins.")
+        except:
+            await message.reply("❌ Invalid number.")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_prem_add_id":
+        try:
+            target_id = int(message.text.strip())
+            panel_states[user_id] = {"state": "wait_prem_duration", "target_id": target_id}
+            await message.reply("**⏳ Duration**\n\nEnter days (e.g. 30):")
+        except:
+             await message.reply("❌ Invalid ID.")
+        return
+
+    if state_key == "wait_prem_duration":
+        try:
+            days = float(message.text.strip())
+            target_id = raw_state["target_id"]
+            await db.add_premium_user(target_id, days)
+            await message.reply(f"✅ User {target_id} is now Premium for {days} days.")
+        except:
+            await message.reply("❌ Invalid number.")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_prem_rem_id":
+        try:
+            target_id = int(message.text.strip())
+            await db.remove_premium_user(target_id)
+            await message.reply(f"✅ User {target_id} removed from Premium.")
+        except:
+            await message.reply("❌ Invalid ID.")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_ref_target":
+        try:
+            val = int(message.text.strip())
+            await db.update_config("referral_target", val)
+            await message.reply(f"✅ Target set to {val}.")
+        except:
+             await message.reply("❌ Invalid.")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_ref_reward":
+        try:
+            val = int(message.text.strip())
+            await db.update_config("referral_reward_hours", val)
+            await message.reply(f"✅ Reward set to {val} hours.")
+        except:
+             await message.reply("❌ Invalid.")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    # Existing Handlers
     if state_key == "wait_bundle_rename":
         code = raw_state["code"]
         new_title = message.text
@@ -427,12 +586,8 @@ async def handle_panel_input(client, message):
 
     if state_key == "wait_share_link":
         link = message.text.strip()
-        # Basic validation
         if not link.startswith("http") and not link.startswith("t.me"):
              await message.reply("⚠️ Warning: Link should start with http or t.me. Proceeding anyway.")
-
-        # Save partially or just pass to next step?
-        # Update state to wait for text
         panel_states[user_id] = {"state": "wait_share_text_final", "link": link}
         await message.reply(
             "✅ Link saved.\n\n"
@@ -445,10 +600,7 @@ async def handle_panel_input(client, message):
     if state_key == "wait_share_text_final":
         text = message.text
         link = raw_state["link"]
-
-        # Add to collection
         await db.add_share_channel(link, text)
-
         await message.reply(f"✅ **Share Channel Added!**\n\nLink: `{link}`\nText: `{text}`")
         del panel_states[user_id]
         await show_main_menu(message)
@@ -457,12 +609,9 @@ async def handle_panel_input(client, message):
     if state_key == "wait_fs_input":
         text = message.text
         chat_id = None
-
-        # Try to parse ID
         if text.lstrip("-").isdigit():
             chat_id = int(text)
         elif text.startswith("@"):
-            # We need to resolve username
             try:
                 chat = await client.get_chat(text)
                 chat_id = chat.id
@@ -475,7 +624,6 @@ async def handle_panel_input(client, message):
              await message.reply("❌ Invalid input. Send ID, Username, or Forward.")
              return
 
-        # Add as Force Sub
         try:
             chat = await client.get_chat(chat_id)
             invite = None
@@ -495,63 +643,48 @@ async def handle_panel_input(client, message):
     elif state_key == "wait_task_input":
         text = message.text
         parts = [p.strip() for p in text.split("|")]
-
         if len(parts) < 2:
             await message.reply("❌ Format error. Try again: `Question | Answer`")
             return
-
         question = parts[0]
         answer = parts[1]
         options = []
         task_type = "text"
-
         if len(parts) > 2 and parts[2]:
             raw_opts = parts[2]
             options = [o.strip() for o in raw_opts.split(",")]
             task_type = "quiz" if options else "text"
-
         await db.add_task(question, answer, options, task_type)
         await message.reply(f"✅ Task Added!\n\nQ: {question}\nA: {answer}")
-
         del panel_states[user_id]
         await show_main_menu(message)
 
     elif state_key == "wait_bulk_task_input":
         text = message.text
-        # Using raw text is safer for splitting.
         lines = text.split("\n")
         added = 0
         failed = 0
-
         for line in lines:
             line = line.strip()
             if not line: continue
-
-            # Simple parsing: Q | A | Opts
             parts = [p.strip() for p in line.split("|")]
             if len(parts) < 2:
-                # Try to be lenient? No, strict format needed for machine processing.
                 failed += 1
                 continue
-
             question = parts[0]
             answer = parts[1]
             options = []
             task_type = "text"
-
             if len(parts) > 2 and parts[2]:
                 raw_opts = parts[2]
                 options = [o.strip() for o in raw_opts.split(",")]
                 task_type = "quiz" if options else "text"
-
             await db.add_task(question, answer, options, task_type)
             added += 1
-
         await message.reply(f"✅ Processed!\nAdded: {added}\nFailed: {failed}")
         del panel_states[user_id]
         await show_main_menu(message)
 
-# Ensure cancel works for panel states explicitly
 @Client.on_message(filters.command("cancel") & filters.user(Config.ADMIN_ID), group=1)
 async def cancel_panel(client, message):
     user_id = message.from_user.id
@@ -559,5 +692,4 @@ async def cancel_panel(client, message):
         del panel_states[user_id]
         await message.reply("❌ Panel action cancelled.")
     else:
-        # Let other handlers (like admin_bundles) handle it
         raise ContinuePropagation

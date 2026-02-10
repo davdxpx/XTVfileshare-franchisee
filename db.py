@@ -170,4 +170,74 @@ class Database:
             upsert=True
         )
 
+    # --- Premium ---
+    async def add_premium_user(self, user_id, duration_days):
+        expiry = time.time() + (duration_days * 24 * 3600)
+        await self.users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"premium_expiry": expiry, "is_premium": True}},
+            upsert=True
+        )
+
+    async def remove_premium_user(self, user_id):
+        await self.users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"is_premium": False, "premium_expiry": 0}}
+        )
+
+    async def is_premium_user(self, user_id):
+        user = await self.users_col.find_one({"user_id": user_id})
+        if not user or not user.get("is_premium"):
+            return False
+        expiry = user.get("premium_expiry", 0)
+        if expiry < time.time():
+            return False
+        return True
+
+    async def get_premium_users(self):
+         cursor = self.users_col.find({"is_premium": True})
+         return await cursor.to_list(length=1000)
+
+    # --- Referrals ---
+    async def set_referrer(self, user_id, referrer_id):
+        # Only set if not already set
+        user = await self.users_col.find_one({"user_id": user_id})
+        if user and user.get("referrer_id"):
+            return False # Already has referrer
+
+        await self.users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"referrer_id": referrer_id}},
+            upsert=True
+        )
+        return True
+
+    async def increment_referral(self, referrer_id):
+        await self.users_col.update_one(
+            {"user_id": referrer_id},
+            {"$inc": {"referral_count": 1}},
+            upsert=True
+        )
+        return await self.get_referral_count(referrer_id)
+
+    async def get_referral_count(self, user_id):
+        user = await self.users_col.find_one({"user_id": user_id})
+        return user.get("referral_count", 0) if user else 0
+
+    # --- Auto-Delete ---
+    async def add_to_delete_queue(self, chat_id, message_ids, delete_at):
+        await self.db.delete_queue.insert_one({
+            "chat_id": chat_id,
+            "message_ids": message_ids,
+            "delete_at": delete_at
+        })
+
+    async def get_due_deletions(self):
+        now = time.time()
+        cursor = self.db.delete_queue.find({"delete_at": {"$lte": now}})
+        return await cursor.to_list(length=100)
+
+    async def remove_from_delete_queue(self, id_list):
+        await self.db.delete_queue.delete_many({"_id": {"$in": id_list}})
+
 db = Database()

@@ -24,6 +24,32 @@ async def seed_tasks():
             await db.add_task(t["q"], t["a"], t.get("opts"), t["t"])
         logger.info("Seeding complete.")
 
+async def auto_delete_loop(app):
+    logger.info("Starting Auto-Delete Loop...")
+    while True:
+        try:
+            # Check DB for due deletions
+            due_list = await db.get_due_deletions()
+            if due_list:
+                for item in due_list:
+                    chat_id = item["chat_id"]
+                    msg_ids = item["message_ids"]
+                    # msg_ids can be list or single int (legacy/robustness)
+                    if isinstance(msg_ids, int): msg_ids = [msg_ids]
+
+                    try:
+                        await app.delete_messages(chat_id, msg_ids)
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-delete in {chat_id}: {e}")
+
+                    # Remove from queue regardless of success (to avoid infinite loop if blocked)
+                    await db.remove_from_delete_queue([item["_id"]])
+
+            await asyncio.sleep(60) # Check every minute
+        except Exception as e:
+            logger.error(f"Auto-Delete Loop Error: {e}")
+            await asyncio.sleep(60)
+
 async def main():
     # Set Start Time
     Config.START_TIME = time.time()
@@ -50,6 +76,9 @@ async def main():
     Config.BOT_USERNAME = me.username
     logger.info(f"Bot started as @{me.username}")
     logger.info("🚀 Bot is running! Developed by @davdxpx")
+
+    # Start Background Tasks
+    asyncio.create_task(auto_delete_loop(app))
 
     # Warmup Peer Cache
     logger.info("Warming up peer cache...")

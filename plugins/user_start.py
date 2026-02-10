@@ -94,16 +94,26 @@ async def deliver_bundle(client, user_id, chat_id, code):
                 await client.send_message(chat_id, caption, parse_mode=ParseMode.HTML)
 
     status_msg = await client.send_message(chat_id, f"✅ Verified! Sending {len(files)} files...")
+    sent_msgs = []
     for file_data in files:
         try:
             from utils.helpers import generate_random_code
             ext = "." + file_data["file_name"].split(".")[-1] if "." in file_data["file_name"] else ""
             new_name = f"file_{generate_random_code(8)}{ext}"
-            await client.send_document(chat_id, file_data["file_id"], caption=None, file_name=new_name, protect_content=True)
+            msg = await client.send_document(chat_id, file_data["file_id"], caption=None, file_name=new_name, protect_content=True)
+            sent_msgs.append(msg.id)
             await asyncio.sleep(Config.DEFAULT_DELAY)
         except Exception as e:
             logger.error(f"Send error: {e}")
     await status_msg.delete()
+
+    # Auto Delete
+    auto_del_mins = await db.get_config("auto_delete_time", 0)
+    if auto_del_mins > 0 and sent_msgs:
+        delete_at = time.time() + (auto_del_mins * 60)
+        await db.add_to_delete_queue(chat_id, sent_msgs, delete_at)
+        await client.send_message(chat_id, f"⚠️ **Attention!** These files will self-destruct in **{auto_del_mins} minutes**!")
+
     try:
         await client.send_sticker(chat_id, "CAACAgIAAxkBAAEQa0xpgkMvycmQypya3zZxS5rU8tuKBQACwJ0AAjP9EEgYhDgLPnTykDgE")
     except: pass
@@ -115,22 +125,58 @@ async def deliver_bundle(client, user_id, chat_id, code):
 @Client.on_message(filters.command("start"))
 async def start_handler(client: Client, message: Message):
     args = message.command
+    user_id = message.from_user.id
+
     if len(args) < 2:
         await message.reply("👋 Welcome!")
         return
 
     code = args[1]
-    user_id = message.from_user.id
+
+    # --- Referral Logic ---
+    if code.startswith("ref_"):
+        try:
+            referrer_id = int(code.split("_")[1])
+            if referrer_id != user_id:
+                # Set referrer
+                if await db.set_referrer(user_id, referrer_id):
+                    # Increment count
+                    new_count = await db.increment_referral(referrer_id)
+                    # Check Target
+                    target = await db.get_config("referral_target", 10)
+                    if new_count >= target:
+                        # Grant Reward
+                        reward_hours = await db.get_config("referral_reward_hours", 24)
+                        await db.add_premium_user(referrer_id, reward_hours / 24.0)
+                        try:
+                            await client.send_message(referrer_id, f"🎉 You invited {target} users! You received {reward_hours}h Premium Access!")
+                        except: pass
+            await message.reply("👋 Welcome! You have been referred to the bot.")
+        except Exception as e:
+            logger.error(f"Ref error: {e}")
+            await message.reply("👋 Welcome!")
+        return
+    # ----------------------
 
     # Check Rate Limit
-    allowed, count = await db.check_rate_limit(user_id)
-    if not allowed:
-        await message.reply(f"❌ Rate limit exceeded. {Config.RATE_LIMIT_BUNDLES} bundles / 2h.")
-        return
+    # Premium users bypass rate limit? Usually yes.
+    is_premium = await db.is_premium_user(user_id)
+
+    if not is_premium:
+        allowed, count = await db.check_rate_limit(user_id)
+        if not allowed:
+            await message.reply(f"❌ Rate limit exceeded. {Config.RATE_LIMIT_BUNDLES} bundles / 2h.")
+            return
 
     bundle = await db.get_bundle(code)
     if not bundle:
         await message.reply("❌ Invalid link.")
+        return
+
+    # Premium Skip Logic
+    if is_premium:
+        await message.reply("🌟 **Premium User Detected!** Bypassing Quest...")
+        await deliver_bundle(client, user_id, message.chat.id, code)
         return
 
     # Generate Quest
@@ -140,6 +186,32 @@ async def start_handler(client: Client, message: Message):
 
     user_sessions[user_id] = {"code": code, "quest": quest}
     await process_quest_step(client, user_id, message.chat.id)
+
+@Client.on_message(filters.command(["referral", "invite"]))
+async def referral_command(client, message):
+    user_id = message.from_user.id
+    bot_username = Config.BOT_USERNAME
+
+    count = await db.get_referral_count(user_id)
+    target = await db.get_config("referral_target", 10)
+    reward_hours = await db.get_config("referral_reward_hours", 24)
+
+    link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+    text = (
+        f"**🚀 Invite Friends & Earn Premium!**\n\n"
+        f"Invite **{target}** users to get **{reward_hours}h Premium Access** (skip all quests).\n\n"
+        f"📊 **Your Progress:** `{count}/{target}`\n\n"
+        f"🔗 **Your Link:**\n`{link}`\n\n"
+        f"__Share this link with your friends!__"
+    )
+
+    from urllib.parse import quote
+    share_text = quote("Check out this awesome bot!")
+    share_url = f"https://t.me/share/url?url={link}&text={share_text}"
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("↗️ Share Link", url=share_url)]])
+
+    await message.reply(text, reply_markup=markup)
 
 async def process_quest_step(client, user_id, chat_id):
     session = user_sessions.get(user_id)
