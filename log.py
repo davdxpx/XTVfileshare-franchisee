@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 
 # Create logs directory if it doesn't exist
@@ -11,7 +12,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         RotatingFileHandler("logs/bot.log", maxBytes=5000000, backupCount=5),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)
     ]
 )
 

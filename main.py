@@ -52,13 +52,21 @@ async def main():
     fs_channels = await db.get_force_sub_channels()
     all_chats = channels + fs_channels
 
-    unique_ids = set(c["chat_id"] for c in all_chats)
-    for chat_id in unique_ids:
+    # Unique dict by chat_id to keep metadata (like username)
+    unique_chats = {c["chat_id"]: c for c in all_chats}
+
+    for chat_id, data in unique_chats.items():
         try:
-            await app.get_chat(chat_id)
-            # logger.info(f"Cached peer: {chat_id}")
+            # Try username first if available (resolves peer better)
+            username = data.get("username")
+            if username:
+                await app.get_chat(username)
+                # logger.info(f"Cached peer via username: {username}")
+            else:
+                await app.get_chat(chat_id)
+                # logger.info(f"Cached peer via ID: {chat_id}")
         except Exception as e:
-            logger.warning(f"Failed to cache peer {chat_id}: {e}")
+            logger.warning(f"Failed to cache peer {chat_id} (@{data.get('username')}): {e}")
 
     await idle()
     await app.stop()
