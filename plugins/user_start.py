@@ -227,7 +227,7 @@ async def process_quest_step(client, user_id, chat_id):
 
         text = (
             f"**{header}**\n\n"
-            "🔄 **Force Share Required**\n\n"
+            "🔄 **Share Required**\n\n"
             "1. Click the **Share** button below and send to 5 contacts.\n"
             "2. Click **Verify** when done."
         )
