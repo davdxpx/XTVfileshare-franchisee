@@ -25,3 +25,6 @@ class Config:
 
     # Bot Version
     BOT_VERSION = "1.6.7"
+
+    # Start Time
+    START_TIME = None

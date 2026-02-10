@@ -3,3 +3,4 @@ motor
 python-dotenv
 tgcrypto
 requests
+psutil
