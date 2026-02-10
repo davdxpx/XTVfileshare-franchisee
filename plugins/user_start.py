@@ -1,5 +1,7 @@
+import html
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.enums import ParseMode
 from config import Config
 from db import db
 from log import get_logger
@@ -27,7 +29,7 @@ async def deliver_bundle(client, user_id, chat_id, code):
 
     files = bundle["file_ids"]
 
-    # Metadata Logic (Same as before)
+    # Metadata Logic
     tmdb_id = bundle.get("tmdb_id")
     media_type = bundle.get("media_type", "movie")
 
@@ -41,12 +43,18 @@ async def deliver_bundle(client, user_id, chat_id, code):
             size_gb = total_size / (1024 * 1024 * 1024)
             size_text = f"{size_gb:.2f} GB" if size_gb >= 1 else f"{total_size / (1024 * 1024):.2f} MB"
 
-            title = details.get("title") or details.get("name")
+            # Fetch data and escape for HTML safety
+            raw_title = details.get("title") or details.get("name")
+            title = html.escape(raw_title) if raw_title else "Unknown"
+
             date = details.get("release_date") or details.get("first_air_date") or ""
             year = date[:4] if date else "Unknown"
+
             poster_path = details.get("poster_path")
             poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None
-            overview = details.get("overview", "No description.")
+
+            raw_overview = details.get("overview", "No description.")
+            overview = html.escape(raw_overview)
 
             meta_lines = []
             if rating: meta_lines.append(f"⭐️ {round(rating, 1)}/10  🎭 {genre_text}")
@@ -56,30 +64,34 @@ async def deliver_bundle(client, user_id, chat_id, code):
                 eps = bundle.get("episodes_label")
                 if season and eps:
                     ep_text = "Complete" if eps == "All" else f"Episodes {eps}"
-                    meta_lines.append(f"📺 **Season {season}** • **{ep_text}**")
+                    # HTML Tags instead of Markdown (** -> <b>)
+                    meta_lines.append(f"📺 <b>Season {season}</b> • <b>{ep_text}</b>")
 
             quals = bundle.get("qualities", [])
-            if quals: meta_lines.append(f"💿 **Quality:** {', '.join(quals)}")
-            meta_lines.append(f"💾 **Size:** {size_text}")
+            if quals:
+                meta_lines.append(f"💿 <b>Quality:</b> {', '.join(quals)}")
+            meta_lines.append(f"💾 <b>Size:</b> {size_text}")
 
-            desc_lines = overview.split("\n")
-            quoted_desc = "\n".join([f"> {line}" for line in desc_lines if line.strip()])
+            # Use HTML Blockquote
+            quoted_desc = f"<blockquote>{overview}</blockquote>"
 
             caption = (
-                f"<u>**{title}**</u> • _({year})_\n"
+                f"<u><b>{title}</b></u> • <i>({year})</i>\n"
                 f"{str.join('\n', meta_lines)}\n\n"
-                f"**💬 Description:**\n"
+                f"<b>💬 Description:</b>\n"
                 f"{quoted_desc}\n\n"
-                f"__Enjoy watching!__ 🍿"
+                f"<i>Enjoy watching!</i> 🍿"
             )
 
             try:
                 if poster_url:
-                    await client.send_photo(chat_id, poster_url, caption=caption)
+                    await client.send_photo(chat_id, poster_url, caption=caption, parse_mode=ParseMode.HTML)
                 else:
-                    await client.send_message(chat_id, caption)
-            except Exception:
-                await client.send_message(chat_id, caption)
+                    await client.send_message(chat_id, caption, parse_mode=ParseMode.HTML)
+            except Exception as e:
+                logger.error(f"Error sending metadata: {e}")
+                # Fallback if something goes wrong
+                await client.send_message(chat_id, caption, parse_mode=ParseMode.HTML)
 
     status_msg = await client.send_message(chat_id, f"✅ Verified! Sending {len(files)} files...")
     for file_data in files:
