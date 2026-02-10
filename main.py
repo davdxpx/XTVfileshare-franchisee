@@ -45,6 +45,7 @@ async def main():
     me = await app.get_me()
     Config.BOT_USERNAME = me.username
     logger.info(f"Bot started as @{me.username}")
+    logger.info("🚀 Bot is running! Developed by @davdxpx")
 
     # Warmup Peer Cache
     logger.info("Warming up peer cache...")
