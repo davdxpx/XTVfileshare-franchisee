@@ -3,6 +3,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from config import Config
 from db import db
 from pyrogram import ContinuePropagation
+from datetime import datetime
 
 # Shared state for admin inputs
 panel_states = {}
@@ -202,7 +203,12 @@ async def list_prem_users(client, callback):
 
     out = "🌟 **Premium Users:**\n"
     for u in users[:50]:
-        out += f"`{u['user_id']}` (Expires: {u.get('premium_expiry')})\n"
+        expiry = u.get('premium_expiry', 0)
+        try:
+            dt = datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M')
+        except:
+            dt = "Invalid"
+        out += f"`{u['user_id']}` (Expires: {dt})\n"
 
     await callback.message.delete()
     await client.send_message(callback.from_user.id, out)
