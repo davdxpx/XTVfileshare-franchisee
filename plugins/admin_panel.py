@@ -55,15 +55,30 @@ async def show_stats(client, callback):
     total_views = sum(b.get("views", 0) for b in bundles)
     popular = sorted(bundles, key=lambda x: x.get("views", 0), reverse=True)[:5]
 
+    # New Metrics
+    total_users = await db.get_total_users()
+    active_24h = await db.get_active_users_24h()
+    new_users_24h = await db.get_new_users_count(1)
+    new_users_week = await db.get_new_users_count(7)
+
+    prem_users = await db.users_col.count_documents({"is_premium": True})
+
     pop_text = ""
     for p in popular:
         pop_text += f"- {p.get('title')} ({p.get('views', 0)} views)\n"
 
     text = (
-        f"**📊 Statistics**\n\n"
-        f"Total Bundles: {len(bundles)}\n"
-        f"Total Requests: {total_views}\n\n"
-        f"**🔥 Popular Bundles:**\n{pop_text}"
+        f"**📊 Statistics Dashboard**\n\n"
+        f"👥 **Users:**\n"
+        f"• Total: `{total_users}`\n"
+        f"• Active (24h): `{active_24h}`\n"
+        f"• New (24h): `{new_users_24h}`\n"
+        f"• New (Week): `{new_users_week}`\n\n"
+        f"💎 **Premium:** `{prem_users}` active\n\n"
+        f"📦 **Content:**\n"
+        f"• Bundles: `{len(bundles)}`\n"
+        f"• Total Views: `{total_views}`\n\n"
+        f"**🔥 Top Bundles:**\n{pop_text}"
     )
 
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_main")]])
@@ -197,12 +212,84 @@ async def list_prem_users(client, callback):
 
 @Client.on_callback_query(filters.regex(r"^admin_growth$"))
 async def admin_growth(client, callback):
-    text = "**🚀 Community Growth**"
+    text = "**🚀 Community Growth & Engagement**"
     markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Broadcast Tool", callback_data="admin_broadcast_menu")],
         [InlineKeyboardButton("🔗 Referral Settings", callback_data="admin_referral_settings")],
+        [InlineKeyboardButton("📅 Daily Bonus", callback_data="admin_daily_bonus")],
+        [InlineKeyboardButton("🎟️ Coupons", callback_data="admin_coupons")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
     await callback.edit_message_text(text, reply_markup=markup)
+
+# --- Coupons ---
+
+@Client.on_callback_query(filters.regex(r"^admin_coupons$"))
+async def admin_coupons(client, callback):
+    coupons = await db.get_all_coupons()
+    text = f"**🎟️ Coupons**\n\nActive Codes: {len(coupons)}"
+
+    markup = [
+        [InlineKeyboardButton("➕ Create Coupon", callback_data="create_coupon_start")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_growth")]
+    ]
+
+    if coupons:
+        list_text = "\n\n"
+        for c in coupons:
+             list_text += f"`{c['code']}`: {c['reward_hours']}h (Used: {c['used_count']}/{c['usage_limit']})\n"
+        text += list_text
+        # Add Delete buttons? simpler to just list for now or use command to delete.
+        # Let's add delete button
+        markup.insert(1, [InlineKeyboardButton("🗑 Delete Coupon", callback_data="del_coupon_start")])
+
+    await callback.edit_message_text(text, reply_markup=InlineKeyboardMarkup(markup))
+
+@Client.on_callback_query(filters.regex(r"^create_coupon_start$"))
+async def create_coupon_start(client, callback):
+    panel_states[callback.from_user.id] = "wait_coupon_code"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**🎟️ Create Coupon**\n\nEnter the **Code** (e.g. `SUMMER24`):")
+
+@Client.on_callback_query(filters.regex(r"^del_coupon_start$"))
+async def del_coupon_start(client, callback):
+    panel_states[callback.from_user.id] = "wait_coupon_del"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**🗑 Delete Coupon**\n\nEnter the **Code** to delete:")
+
+# --- Daily Bonus ---
+
+@Client.on_callback_query(filters.regex(r"^admin_daily_bonus$"))
+async def admin_daily_bonus(client, callback):
+    enabled = await db.get_config("daily_bonus_enabled", False)
+    reward = await db.get_config("daily_bonus_reward", 1)
+
+    status = "✅ Enabled" if enabled else "❌ Disabled"
+
+    text = (
+        f"**📅 Daily Bonus**\n\n"
+        f"Status: {status}\n"
+        f"Reward: `{reward} hours` Premium"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Toggle Status", callback_data="toggle_daily_bonus")],
+        [InlineKeyboardButton("✏️ Set Reward", callback_data="set_daily_reward")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_growth")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^toggle_daily_bonus$"))
+async def toggle_daily_bonus(client, callback):
+    curr = await db.get_config("daily_bonus_enabled", False)
+    await db.update_config("daily_bonus_enabled", not curr)
+    await admin_daily_bonus(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^set_daily_reward$"))
+async def set_daily_reward(client, callback):
+    panel_states[callback.from_user.id] = "wait_daily_reward"
+    await callback.message.delete()
+    await client.send_message(callback.from_user.id, "**Set Daily Reward**\n\nEnter hours:")
 
 @Client.on_callback_query(filters.regex(r"^admin_referral_settings$"))
 async def admin_referral_settings(client, callback):
@@ -516,6 +603,56 @@ async def handle_panel_input(client, message):
             await message.reply(f"✅ Auto-Delete set to {val} mins.")
         except:
             await message.reply("❌ Invalid number.")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    # Coupon Steps
+    if state_key == "wait_coupon_code":
+        code = message.text.strip().upper()
+        panel_states[user_id] = {"state": "wait_coupon_reward", "code": code}
+        await message.reply(f"Code: `{code}`\n\n**Reward Hours?** (e.g. 24)")
+        return
+
+    if state_key == "wait_coupon_reward":
+        try:
+            hours = int(message.text)
+            code = raw_state["code"]
+            panel_states[user_id] = {"state": "wait_coupon_limit", "code": code, "reward": hours}
+            await message.reply(f"Reward: {hours}h.\n\n**Usage Limit?** (e.g. 100)")
+        except:
+            await message.reply("❌ Number needed.")
+        return
+
+    if state_key == "wait_coupon_limit":
+        try:
+            limit = int(message.text)
+            code = raw_state["code"]
+            reward = raw_state["reward"]
+
+            await db.create_coupon(code, reward, limit)
+            await message.reply(f"✅ Coupon Created!\n`{code}` -> {reward}h (Max {limit})")
+            del panel_states[user_id]
+            await show_main_menu(message)
+        except:
+            await message.reply("❌ Number needed.")
+        return
+
+    if state_key == "wait_coupon_del":
+        code = message.text.strip().upper()
+        await db.delete_coupon(code)
+        await message.reply(f"✅ Coupon `{code}` deleted (if it existed).")
+        del panel_states[user_id]
+        await show_main_menu(message)
+        return
+
+    if state_key == "wait_daily_reward":
+        try:
+            val = int(message.text)
+            await db.update_config("daily_bonus_reward", val)
+            await message.reply(f"✅ Daily Reward set to {val} hours.")
+        except:
+            await message.reply("❌ Number.")
         del panel_states[user_id]
         await show_main_menu(message)
         return
