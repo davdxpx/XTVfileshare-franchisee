@@ -361,4 +361,23 @@ class Database:
             upsert=True
         )
 
+    # --- User History ---
+    async def add_user_history(self, user_id, code, title):
+        # Cap at 10
+        await self.users_col.update_one(
+            {"user_id": user_id},
+            {"$push": {"history": {
+                "$each": [{"code": code, "title": title, "ts": time.time()}],
+                "$slice": -10
+            }}},
+            upsert=True
+        )
+
+    async def get_user_history(self, user_id):
+        user = await self.users_col.find_one({"user_id": user_id})
+        if not user: return []
+        # Return reversed (newest first)
+        hist = user.get("history", [])
+        return list(reversed(hist))
+
 db = Database()

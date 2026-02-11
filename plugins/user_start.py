@@ -33,6 +33,10 @@ async def deliver_bundle(client, user_id, chat_id, code):
     tmdb_id = bundle.get("tmdb_id")
     media_type = bundle.get("media_type", "movie")
 
+    # Add to History (New Feature)
+    bundle_title = bundle.get("title", "Unknown Bundle")
+    await db.add_user_history(user_id, code, bundle_title)
+
     if tmdb_id:
         details = get_tmdb_details(tmdb_id, media_type)
         if details:
