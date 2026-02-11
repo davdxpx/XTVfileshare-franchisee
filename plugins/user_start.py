@@ -138,20 +138,32 @@ async def start_handler(client: Client, message: Message):
         try:
             referrer_id = int(code.split("_")[1])
             if referrer_id != user_id:
-                # Set referrer
+                # Set referrer (but don't count yet!)
                 if await db.set_referrer(user_id, referrer_id):
-                    # Increment count
-                    new_count = await db.increment_referral(referrer_id)
-                    # Check Target
-                    target = await db.get_config("referral_target", 10)
-                    if new_count >= target:
-                        # Grant Reward
-                        reward_hours = await db.get_config("referral_reward_hours", 24)
-                        await db.add_premium_user(referrer_id, reward_hours / 24.0)
-                        try:
-                            await client.send_message(referrer_id, f"🎉 You invited {target} users! You received {reward_hours}h Premium Access!")
-                        except: pass
-            await message.reply("👋 Welcome! You have been referred to the bot.")
+                    # Pick random FS channel
+                    fs_channels = await db.get_force_sub_channels()
+
+                    if fs_channels:
+                        import random
+                        ch = random.choice(fs_channels)
+                        link = ch.get("invite_link") or f"https://t.me/{ch.get('username')}"
+
+                        text = (
+                            f"👋 **Welcome!**\n\n"
+                            f"To activate the bot (and support your friend), please join our partner channel:\n\n"
+                            f"👉 **{ch.get('title')}**"
+                        )
+                        markup = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🚀 Join Channel", url=link)],
+                            [InlineKeyboardButton("✅ I Joined", callback_data=f"ref_verify|{ch['chat_id']}|{referrer_id}")]
+                        ])
+                        await message.reply(text, reply_markup=markup)
+                        return # Stop here! User must verify.
+                    else:
+                        # No FS channels? Just count it.
+                        await process_referral_reward(client, referrer_id)
+                        await message.reply("👋 Welcome! You have been referred to the bot.")
+
         except Exception as e:
             logger.error(f"Ref error: {e}")
             await message.reply("👋 Welcome!")
@@ -187,31 +199,7 @@ async def start_handler(client: Client, message: Message):
     user_sessions[user_id] = {"code": code, "quest": quest}
     await process_quest_step(client, user_id, message.chat.id)
 
-@Client.on_message(filters.command(["referral", "invite"]))
-async def referral_command(client, message):
-    user_id = message.from_user.id
-    bot_username = Config.BOT_USERNAME
-
-    count = await db.get_referral_count(user_id)
-    target = await db.get_config("referral_target", 10)
-    reward_hours = await db.get_config("referral_reward_hours", 24)
-
-    link = f"https://t.me/{bot_username}?start=ref_{user_id}"
-
-    text = (
-        f"**🚀 Invite Friends & Earn Premium!**\n\n"
-        f"Invite **{target}** users to get **{reward_hours}h Premium Access** (skip all quests).\n\n"
-        f"📊 **Your Progress:** `{count}/{target}`\n\n"
-        f"🔗 **Your Link:**\n`{link}`\n\n"
-        f"__Share this link with your friends!__"
-    )
-
-    from urllib.parse import quote
-    share_text = quote("Check out this awesome bot!")
-    share_url = f"https://t.me/share/url?url={link}&text={share_text}"
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("↗️ Share Link", url=share_url)]])
-
-    await message.reply(text, reply_markup=markup)
+# Replaced by plugins/community.py
 
 async def process_quest_step(client, user_id, chat_id):
     session = user_sessions.get(user_id)
@@ -326,6 +314,66 @@ async def delayed_verify_button(message, markup):
         await message.edit_reply_markup(reply_markup=markup)
     except Exception as e:
         logger.warning(f"Failed to update share markup: {e}")
+
+async def process_referral_reward(client, referrer_id):
+    # Increment count
+    new_count = await db.increment_referral(referrer_id)
+    # Check Target
+    target = await db.get_config("referral_target", 10)
+
+    # Notify Referrer (Optional, maybe not every single one?)
+    # "👤 New User Joined! (1/10)"
+    try:
+        await client.send_message(referrer_id, f"👤 **New User Joined!**\n\nProgress: `{new_count}/{target}`")
+    except: pass
+
+    if new_count >= target:
+        # Check if already rewarded for this cycle?
+        # Ideally we reset count or allow multiple cycles.
+        # Simple Logic: Every multiple of target? Or just once?
+        # User implies "Invite 10 -> Reward". Resetting count is cleaner or tracking cycles.
+        # Let's assume One-Time or Cumulative.
+        # If Cumulative: if new_count % target == 0
+        if new_count % target == 0:
+            reward_hours = await db.get_config("referral_reward_hours", 24)
+            await db.add_premium_user(referrer_id, reward_hours / 24.0)
+            try:
+                await client.send_message(referrer_id, f"🎉 **Target Reached!**\n\nYou invited {target} users!\n🎁 **Reward:** {reward_hours}h Premium Access granted!")
+            except: pass
+
+@Client.on_callback_query(filters.regex(r"^ref_verify\|"))
+async def ref_verify_callback(client, callback):
+    # Data: ref_verify|chat_id|referrer_id
+    try:
+        parts = callback.data.split("|")
+        chat_id = int(parts[1])
+        referrer_id = int(parts[2])
+        user_id = callback.from_user.id
+
+        # Verify Membership
+        try:
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["left", "kicked", "banned"]:
+                await callback.answer("❌ You haven't joined yet!", show_alert=True)
+                return
+        except Exception as e:
+             # If bot can't see, we might assume success or fail.
+             # Fail is safer.
+             await callback.answer(f"❌ Verification failed. Try again in a moment.", show_alert=True)
+             return
+
+        # Success!
+        await callback.message.delete()
+        await callback.answer("✅ Success! Welcome!")
+
+        # Reward
+        await process_referral_reward(client, referrer_id)
+
+        # Send Welcome Msg
+        await client.send_message(user_id, "👋 **Welcome to XTV Fileshare Bot!**\n\nYou can now use the bot freely.")
+
+    except Exception as e:
+        logger.error(f"Ref verify error: {e}")
 
 # --- Handlers ---
 
