@@ -27,10 +27,13 @@ async def show_main_menu(message_or_callback):
         ],
         [
             InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles"),
-            InlineKeyboardButton("📢 Channels", callback_data="admin_channels_menu")
+            InlineKeyboardButton("📦 Grouped Bundles", callback_data="admin_grouped_bundles")
         ],
         [
-            InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks"),
+            InlineKeyboardButton("📢 Channels", callback_data="admin_channels_menu"),
+            InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks")
+        ],
+        [
             InlineKeyboardButton("❌ Close", callback_data="admin_close")
         ]
     ])
@@ -105,10 +108,42 @@ async def admin_settings_menu(client, callback):
     text = "**⚙️ Settings**"
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🛠️ General Config", callback_data="admin_settings_general")],
+        [InlineKeyboardButton("📦 Group Config", callback_data="admin_settings_groups")],
         [InlineKeyboardButton("🛡️ Anti-Leech Config", callback_data="admin_settings_leech")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
     await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^admin_settings_groups$"))
+async def admin_settings_groups(client, callback):
+    enabled = await db.get_config("grouped_bundles_enabled", True)
+    redirect = await db.get_config("single_bundle_redirect", True)
+
+    text = (
+        "**📦 Group Settings**\n\n"
+        f"Enable Groups: `{enabled}`\n"
+        f"Smart Redirect: `{redirect}`\n"
+        "__(If enabled, specific quality links will open the Group Menu if multiple options exist)__"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Toggle Groups ({enabled})", callback_data="toggle_grp_enabled")],
+        [InlineKeyboardButton(f"Toggle Redirect ({redirect})", callback_data="toggle_grp_redirect")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_settings_menu")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^toggle_grp_"))
+async def toggle_group_settings(client, callback):
+    mode = callback.data.split("_")[2]
+    if mode == "enabled":
+        curr = await db.get_config("grouped_bundles_enabled", True)
+        await db.update_config("grouped_bundles_enabled", not curr)
+    elif mode == "redirect":
+        curr = await db.get_config("single_bundle_redirect", True)
+        await db.update_config("single_bundle_redirect", not curr)
+
+    await admin_settings_groups(client, callback)
 
 @Client.on_callback_query(filters.regex(r"^admin_settings_general$"))
 async def admin_settings_general(client, callback):

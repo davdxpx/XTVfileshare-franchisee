@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 # {user_id: {"code": str, "quest": dict}}
 user_sessions = {}
 
-# --- Delivery (Moved up for clarity) ---
+# --- Delivery ---
 async def deliver_bundle(client, user_id, chat_id, code):
     bundle = await db.get_bundle(code)
     if not bundle:
@@ -38,7 +38,7 @@ async def deliver_bundle(client, user_id, chat_id, code):
     await db.add_user_history(user_id, code, bundle_title)
 
     if tmdb_id:
-        details = get_tmdb_details(tmdb_id, media_type)
+        details = await get_tmdb_details(tmdb_id, media_type)
         if details:
             rating = details.get("vote_average", 0)
             genres = [g["name"] for g in details.get("genres", [])[:3]]
@@ -124,6 +124,106 @@ async def deliver_bundle(client, user_id, chat_id, code):
 
     if user_id in user_sessions: del user_sessions[user_id]
 
+# --- Group Menu Logic ---
+
+async def show_group_menu(client, chat_id, group_code, selected_bundle=None):
+    group = await db.get_group(group_code)
+    if not group:
+        await client.send_message(chat_id, "❌ Group not found.")
+        return
+
+    # Metadata
+    tmdb_id = group.get("tmdb_id")
+    mtype = group.get("media_type")
+    title = group.get("title")
+
+    poster_url = None
+    desc = "Choose your preferred quality:"
+
+    if tmdb_id:
+        details = await get_tmdb_details(tmdb_id, mtype)
+        if details:
+            poster_path = details.get("poster_path")
+            if poster_path:
+                poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}"
+
+            ov = details.get("overview")
+            if ov: desc = f"<blockquote>{html.escape(ov[:200])}...</blockquote>\n\n" + desc
+
+    # Buttons
+    bundles = []
+
+    for b_code in group.get("bundles", []):
+        b = await db.get_bundle(b_code)
+        if b:
+            # Label: Qualities joined
+            quals = b.get("qualities", [])
+            label = ", ".join(quals) if quals else b.get("title", "Standard")
+            # Mark selected?
+            prefix = "✅ " if b_code == selected_bundle else ""
+            bundles.append(InlineKeyboardButton(f"{prefix}{label}", callback_data=f"start_bund|{b_code}"))
+
+    # Layout: 1 per row for clear quality selection
+    rows = [[b] for b in bundles]
+
+    text = f"🎬 **{title}**\n\n{desc}"
+
+    try:
+        if poster_url:
+            await client.send_photo(chat_id, poster_url, caption=text, reply_markup=InlineKeyboardMarkup(rows))
+        else:
+            await client.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(rows))
+    except Exception as e:
+        logger.error(f"Group menu error: {e}")
+        await client.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def process_bundle_start_internal(client, user_id, chat_id, code, force_direct=False, reply_method=None):
+    if reply_method is None:
+        async def reply_method(text, **kwargs):
+            return await client.send_message(chat_id, text, **kwargs)
+
+    # Check Bundle
+    bundle = await db.get_bundle(code)
+    if not bundle:
+        await reply_method("❌ Invalid link.")
+        return
+
+    is_premium = await db.is_premium_user(user_id)
+
+    if not is_premium:
+        allowed, count = await db.check_rate_limit(user_id)
+        if not allowed:
+             await reply_method(f"❌ Rate limit exceeded. {Config.RATE_LIMIT_BUNDLES} bundles / 2h.")
+             return
+
+    # Check Group Redirect
+    if not force_direct:
+        grouped_enabled = await db.get_config("grouped_bundles_enabled", True)
+        smart_redirect = await db.get_config("single_bundle_redirect", True)
+
+        if grouped_enabled and smart_redirect:
+            group = await db.get_group_by_bundle(code)
+            if group and len(group.get("bundles", [])) > 1:
+                await show_group_menu(client, chat_id, group["code"], selected_bundle=code)
+                return
+
+    if is_premium:
+         await reply_method("🌟 **Premium User Detected!** Bypassing Quest...")
+         await deliver_bundle(client, user_id, chat_id, code)
+    else:
+         msg = await reply_method("⏳ Calculating requirements...")
+         quest = await QuestEngine.generate_quest(user_id, bundle, client)
+         await msg.delete()
+         user_sessions[user_id] = {"code": code, "quest": quest}
+         await process_quest_step(client, user_id, chat_id)
+
+@Client.on_callback_query(filters.regex(r"^start_bund\|"))
+async def start_bundle_callback(client, callback):
+    code = callback.data.split("|")[1]
+    await callback.message.delete()
+    await process_bundle_start_internal(client, callback.from_user.id, callback.message.chat.id, code, force_direct=True)
+
 # --- Main Logic ---
 
 @Client.on_message(filters.command("start"))
@@ -174,34 +274,15 @@ async def start_handler(client: Client, message: Message):
         return
     # ----------------------
 
-    # Check Rate Limit
-    # Premium users bypass rate limit? Usually yes.
-    is_premium = await db.is_premium_user(user_id)
-
-    if not is_premium:
-        allowed, count = await db.check_rate_limit(user_id)
-        if not allowed:
-            await message.reply(f"❌ Rate limit exceeded. {Config.RATE_LIMIT_BUNDLES} bundles / 2h.")
-            return
-
-    bundle = await db.get_bundle(code)
-    if not bundle:
-        await message.reply("❌ Invalid link.")
+    # Group Start
+    if code.startswith("group_"):
+        group_code = code.replace("group_", "")
+        await show_group_menu(client, message.chat.id, group_code)
         return
 
-    # Premium Skip Logic
-    if is_premium:
-        await message.reply("🌟 **Premium User Detected!** Bypassing Quest...")
-        await deliver_bundle(client, user_id, message.chat.id, code)
-        return
+    # Normal Bundle Start
+    await process_bundle_start_internal(client, user_id, message.chat.id, code, force_direct=False, reply_method=message.reply)
 
-    # Generate Quest
-    msg = await message.reply("⏳ Calculating requirements...")
-    quest = await QuestEngine.generate_quest(user_id, bundle, client)
-    await msg.delete()
-
-    user_sessions[user_id] = {"code": code, "quest": quest}
-    await process_quest_step(client, user_id, message.chat.id)
 
 # Replaced by plugins/community.py
 
