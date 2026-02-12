@@ -299,12 +299,26 @@ async def on_eps_select(client, callback):
         admin_states[user_id]["step"] = "wait_manual_eps"
         await callback.edit_message_text("⌨️ **Enter Episodes:**\n\nExamples: `1-5` or `1,3,5`")
 
-async def auto_group_bundle(client, bundle_code, tmdb_id, media_type, season, bundle_title):
+async def auto_group_bundle(client, bundle_code, tmdb_id, media_type, season, bundle_title, episodes_label=None):
     if not tmdb_id:
         return None, None
 
+    # Determine episode grouping logic
+    # If media_type is TV and episodes_label looks like a single episode "5", we group by that.
+    # If "All", we group by season (episode_val=None or "All"?). Let's stick to None for "Season Pack".
+    # User requirement: "eine episode hochlade ... dann will ich auch so ein menü".
+
+    episode_val = None
+    if media_type == "tv" and episodes_label:
+        # Check if single integer
+        if episodes_label.isdigit():
+            episode_val = episodes_label
+        # Else (e.g. "1-5", "All"), we treat as Season Pack (None) or specific range?
+        # User implies single episode grouping. Ranges are usually unique packs.
+        # Let's group ONLY if it is a single episode number.
+
     # Check if group exists
-    group = await db.get_group_by_tmdb(tmdb_id, media_type, season)
+    group = await db.get_group_by_tmdb(tmdb_id, media_type, season, episode_val)
 
     if group:
         await db.add_bundle_to_group(group["code"], bundle_code)
@@ -319,7 +333,10 @@ async def auto_group_bundle(client, bundle_code, tmdb_id, media_type, season, bu
             year = (details.get("first_air_date") or details.get("release_date") or "")[:4]
 
             if media_type == "tv" and season:
-                group_title = f"{clean_title} S{season}"
+                if episode_val:
+                    group_title = f"{clean_title} S{season} E{episode_val}"
+                else:
+                    group_title = f"{clean_title} S{season}"
             else:
                 group_title = f"{clean_title} ({year})"
         else:
@@ -327,7 +344,7 @@ async def auto_group_bundle(client, bundle_code, tmdb_id, media_type, season, bu
             group_title = bundle_title or f"Group {tmdb_id}"
 
         code = generate_random_code()
-        await db.create_group(code, group_title, tmdb_id, media_type, season, [bundle_code])
+        await db.create_group(code, group_title, tmdb_id, media_type, season, [bundle_code], episode_val)
         logger.info(f"Created new group {group_title} for {bundle_code}")
         return group_title, code
 
@@ -429,7 +446,8 @@ async def finalize_bundle(client, user_id, message_obj):
         # Auto Grouping
         group_title, group_code = await auto_group_bundle(
             client, code, data.get("tmdb_id"),
-            data.get("media_type"), data.get("season_number"), bundle_title
+            data.get("media_type"), data.get("season_number"), bundle_title,
+            data.get("bundle_episodes")
         )
 
         bot_username = Config.BOT_USERNAME

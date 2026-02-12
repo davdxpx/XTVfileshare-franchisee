@@ -157,11 +157,11 @@ async def add_group_start(client, callback):
             "_id": {
                 "tmdb_id": "$tmdb_id",
                 "media_type": "$media_type",
-                "season": "$season" # Can be null for movies
+                "season": "$season",
+                "episode_val": "$episodes_label" # New: Group by episode label too
             },
             "count": {"$sum": 1},
             "sample_title": {"$first": "$title"},
-            # We try to get cached title if available, else first bundle title
             "tmdb_title": {"$first": "$tmdb_title"},
             "tmdb_year": {"$first": "$tmdb_year"}
         }}
@@ -186,33 +186,57 @@ async def add_group_start(client, callback):
         tmdb_id = meta.get("tmdb_id")
         mtype = meta.get("media_type", "movie")
         season = meta.get("season")
+        ep_label = meta.get("episode_val")
+
+        # Determine episode_val for grouping logic
+        # If label is digit, we group by it. If not (e.g. range or All), we group by Season (None).
+        # Wait, if we group by "All" in aggregation, we get separate groups for "All" and "1-5".
+        # But our DB logic for get_group_by_tmdb uses episode_val=None for Season Packs.
+        # So if ep_label is NOT a digit, we treat it as None for checking existence.
+
+        target_ep_val = ep_label if (ep_label and ep_label.isdigit()) else None
 
         # Check if group exists
-        exists = await db.get_group_by_tmdb(tmdb_id, mtype, season)
+        exists = await db.get_group_by_tmdb(tmdb_id, mtype, season, target_ep_val)
+
         if not exists:
             # Candidate!
-            # Resolve Title: Use cached tmdb_title if avail, else construct/fetch
             title = r.get("tmdb_title")
             year = r.get("tmdb_year")
 
             if not title:
-                # Fallback to sample bundle title or fetch later
-                # We can't fetch all here (too slow).
-                # We'll fetch on button click or show basic info
                 title = r.get("sample_title") or f"ID: {tmdb_id}"
 
             # Format display
             if mtype == "tv" and season:
-                display = f"{title} S{season}"
+                if target_ep_val:
+                    display = f"{title} S{season} E{target_ep_val}"
+                else:
+                    display = f"{title} S{season}"
             else:
                 display = f"{title}"
 
             if year: display += f" ({year})"
 
+            # Avoid duplicates if multiple non-digit labels (e.g. "All" and "1-5") map to same Season group
+            # We should probably merge them in display?
+            # Or just show them. If we create group for "All", "1-5" will be auto-added later?
+            # No, manual creation creates ONE group.
+            # Let's verify if we already added a candidate for this target_ep_val
+
+            # Unique key for candidates list
+            cand_key = f"{tmdb_id}_{mtype}_{season}_{target_ep_val}"
+
+            # Append if not seen (simple de-dupe logic needed?)
+            # Actually, aggregation groups by specific label. "All" and "1-5" are distinct.
+            # If both map to target_ep_val=None, we might show two buttons that do the same thing (Create Season Group).
+            # That's fine.
+
             candidates.append({
                 "display": display,
                 "count": r["count"],
-                "meta": meta
+                "meta": meta,
+                "target_ep": target_ep_val
             })
 
     if not candidates:
@@ -227,12 +251,19 @@ async def add_group_start(client, callback):
     markup = []
     for c in candidates[:20]:
         meta = c["meta"]
-        # Encode data: create_grp|tmdb_id|type|season
-        # Be careful of length limit (64 bytes). tmdb_id is ~6, type ~5, season ~2. Safe.
-        season_val = meta.get('season')
-        if season_val is None: season_val = "x" # placeholder
+        # Encode data: create_grp|tmdb_id|type|season|ep_val
+        # Shorten to stay within limits.
 
-        data_str = f"create_grp|{meta['tmdb_id']}|{meta.get('media_type')}|{season_val}"
+        sid = meta['tmdb_id']
+        mt = meta.get('media_type')
+        sea = meta.get('season')
+        if sea is None: sea = "x"
+
+        ep = c["target_ep"]
+        if ep is None: ep = "x"
+
+        # Format: cg|id|type|s|e (shorter prefix)
+        data_str = f"cg|{sid}|{mt}|{sea}|{ep}"
 
         btn_text = f"{c['display']} ({c['count']} bundles)"
         markup.append([InlineKeyboardButton(btn_text, callback_data=data_str)])
@@ -244,11 +275,18 @@ async def add_group_start(client, callback):
         reply_markup=InlineKeyboardMarkup(markup)
     )
 
-@Client.on_callback_query(filters.regex(r"^create_grp\|"))
+@Client.on_callback_query(filters.regex(r"^cg\|"))
 async def create_group_click(client, callback):
     try:
-        _, tmdb_id, mtype, season_str = callback.data.split("|")
+        parts = callback.data.split("|")
+        # cg|id|type|s|e
+        tmdb_id = parts[1]
+        mtype = parts[2]
+        season_str = parts[3]
+        ep_str = parts[4]
+
         season = int(season_str) if season_str != "x" else None
+        target_ep = ep_str if ep_str != "x" else None
 
         await callback.edit_message_text("⏳ **Creating Group...** fetching details...")
 
@@ -259,13 +297,16 @@ async def create_group_click(client, callback):
             year = (details.get("first_air_date") or details.get("release_date") or "")[:4]
 
             if mtype == "tv" and season:
-                group_title = f"{clean_title} S{season}"
+                if target_ep:
+                    group_title = f"{clean_title} S{season} E{target_ep}"
+                else:
+                    group_title = f"{clean_title} S{season}"
             else:
                 group_title = f"{clean_title} ({year})"
         else:
             group_title = f"Group {tmdb_id}"
 
-        # 2. Find bundles
+        # 2. Find bundles (Matching the criteria)
         query = {
             "tmdb_id": str(tmdb_id),
             "media_type": mtype
@@ -273,13 +314,32 @@ async def create_group_click(client, callback):
         if season is not None:
             query["season"] = int(season)
 
+        # Filter by episode label if target_ep is set
+        if target_ep:
+            query["episodes_label"] = target_ep
+        else:
+             # If Season Pack, we want ALL non-single-episode bundles?
+             # Or just everything that isn't a single episode?
+             # For simplicity, if creating a Season Group, we pull "All", "1-5", etc.
+             # But NOT single episodes (which belong to their own groups).
+             # So label must NOT be digit?
+             # regex for NOT digit: {"$not": re.compile(r"^\d+$")}
+             # But MongoDB $regex might be heavy.
+             # Let's simplify: Pull everything that matches.
+             # If a bundle is "E5" and we create "S1" group, it might get added?
+             # Auto-group logic separates them. Manual creation should too.
+             # If target_ep is None, we skip bundles where label IS digit.
+             # Or we rely on the user to create the E5 group separately.
+             # Let's try to be smart:
+             query["episodes_label"] = {"$not": {"$regex": r"^\d+$"}}
+
         cursor = db.bundles_col.find(query)
         bundles = await cursor.to_list(length=100)
         bundle_codes = [b["code"] for b in bundles]
 
         # 3. Create
         code = generate_random_code()
-        await db.create_group(code, group_title, tmdb_id, mtype, season, bundle_codes)
+        await db.create_group(code, group_title, tmdb_id, mtype, season, bundle_codes, target_ep)
 
         await callback.edit_message_text(
             f"✅ **Group Created!**\n\n"
