@@ -141,95 +141,157 @@ async def rename_group_start(client, callback):
         f"**✏️ Rename Group**\n\nCode: `{code}`\n\nEnter new title:"
     )
 
-# --- Add Group Wizard ---
+# --- Add Group Wizard (Scan Mode) ---
 
 @Client.on_callback_query(filters.regex(r"^add_group_start$"))
 async def add_group_start(client, callback):
-    group_states[callback.from_user.id] = {"state": "wait_group_tmdb"}
-    await callback.message.delete()
-    await client.send_message(
-        callback.from_user.id,
-        "**➕ Create Group**\n\n"
-        "Enter **TMDb ID** to scan for bundles and create a group.\n"
-        "(e.g. `12345`)"
-    )
+    await callback.edit_message_text("⏳ **Scanning Bundles...**\nThis may take a moment.")
 
-async def finish_create_group(client, user_id, message):
-    state = group_states.get(user_id)
-    if not state: return
+    # 1. Fetch all bundles that have tmdb_id
+    # We want bundles where tmdb_id exists and is not null
+    # Optimally, we use aggregation to group them
 
-    tmdb_id = state.get("tmdb_id")
-    mtype = state.get("type")
-    season = state.get("season")
+    pipeline = [
+        {"$match": {"tmdb_id": {"$exists": True, "$ne": None}}},
+        {"$group": {
+            "_id": {
+                "tmdb_id": "$tmdb_id",
+                "media_type": "$media_type",
+                "season": "$season" # Can be null for movies
+            },
+            "count": {"$sum": 1},
+            "sample_title": {"$first": "$title"},
+            # We try to get cached title if available, else first bundle title
+            "tmdb_title": {"$first": "$tmdb_title"},
+            "tmdb_year": {"$first": "$tmdb_year"}
+        }}
+    ]
 
-    # Check if exists
-    existing = await db.get_group_by_tmdb(tmdb_id, mtype, season)
-    if existing:
-        await message.reply(f"❌ Group already exists: **{existing.get('title')}**\nCode: `{existing.get('code')}`")
-        del group_states[user_id]
+    results = await db.bundles_col.aggregate(pipeline).to_list(length=100)
+
+    if not results:
+        await callback.edit_message_text(
+            "❌ No bundles found with TMDb metadata.\n\n"
+            "Create bundles using the wizard first.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_grouped_bundles")]])
+        )
         return
 
-    # Scan for bundles
-    query = {
-        "tmdb_id": str(tmdb_id),
-        "media_type": mtype
-    }
-    if season is not None:
-        query["season"] = int(season)
+    # 2. Filter out existing groups
+    # This is O(N) but manageable for now
+    candidates = []
 
-    # We need to access bundles_col directly as get_all_bundles doesn't filter
-    # And loading all bundles is bad if many.
-    # Using private access to col for now as this is a plugin
-    cursor = db.bundles_col.find(query)
-    found_bundles = await cursor.to_list(length=100)
+    for r in results:
+        meta = r["_id"]
+        tmdb_id = meta.get("tmdb_id")
+        mtype = meta.get("media_type", "movie")
+        season = meta.get("season")
 
-    if not found_bundles:
-        await message.reply("⚠️ No existing bundles found with this metadata. Creating empty group.")
+        # Check if group exists
+        exists = await db.get_group_by_tmdb(tmdb_id, mtype, season)
+        if not exists:
+            # Candidate!
+            # Resolve Title: Use cached tmdb_title if avail, else construct/fetch
+            title = r.get("tmdb_title")
+            year = r.get("tmdb_year")
 
-    bundle_codes = [b["code"] for b in found_bundles]
+            if not title:
+                # Fallback to sample bundle title or fetch later
+                # We can't fetch all here (too slow).
+                # We'll fetch on button click or show basic info
+                title = r.get("sample_title") or f"ID: {tmdb_id}"
 
-    # Get Title
-    details = await get_tmdb_details(tmdb_id, mtype)
-    if details:
-        clean_title = details.get("name") or details.get("title") or "Untitled"
-        year = (details.get("first_air_date") or details.get("release_date") or "")[:4]
+            # Format display
+            if mtype == "tv" and season:
+                display = f"{title} S{season}"
+            else:
+                display = f"{title}"
 
-        if mtype == "tv" and season:
-            group_title = f"{clean_title} S{season}"
-        else:
-            group_title = f"{clean_title} ({year})"
-    else:
-        group_title = f"Group {tmdb_id}"
+            if year: display += f" ({year})"
 
-    code = generate_random_code()
-    await db.create_group(code, group_title, tmdb_id, mtype, season, bundle_codes)
+            candidates.append({
+                "display": display,
+                "count": r["count"],
+                "meta": meta
+            })
 
-    text = (
-        f"✅ **Group Created!**\n\n"
-        f"Title: `{group_title}`\n"
-        f"Bundles Added: `{len(bundle_codes)}`\n"
-        f"Code: `{code}`"
+    if not candidates:
+        await callback.edit_message_text(
+            "✅ All bundles are already grouped!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_grouped_bundles")]])
+        )
+        return
+
+    # 3. Show List
+    # Limit to 20 candidates
+    markup = []
+    for c in candidates[:20]:
+        meta = c["meta"]
+        # Encode data: create_grp|tmdb_id|type|season
+        # Be careful of length limit (64 bytes). tmdb_id is ~6, type ~5, season ~2. Safe.
+        season_val = meta.get('season')
+        if season_val is None: season_val = "x" # placeholder
+
+        data_str = f"create_grp|{meta['tmdb_id']}|{meta.get('media_type')}|{season_val}"
+
+        btn_text = f"{c['display']} ({c['count']} bundles)"
+        markup.append([InlineKeyboardButton(btn_text, callback_data=data_str)])
+
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_grouped_bundles")])
+
+    await callback.edit_message_text(
+        f"**➕ Found {len(candidates)} Ungrouped Sets**\nSelect one to create a group:",
+        reply_markup=InlineKeyboardMarkup(markup)
     )
-    await message.reply(text)
-    del group_states[user_id]
 
+@Client.on_callback_query(filters.regex(r"^create_grp\|"))
+async def create_group_click(client, callback):
+    try:
+        _, tmdb_id, mtype, season_str = callback.data.split("|")
+        season = int(season_str) if season_str != "x" else None
 
-@Client.on_callback_query(filters.regex(r"^grp_type_"))
-async def group_type_select(client, callback):
-    user_id = callback.from_user.id
-    if user_id not in group_states: return
+        await callback.edit_message_text("⏳ **Creating Group...** fetching details...")
 
-    mtype = callback.data.split("_")[2] # movie or tv
-    group_states[user_id]["type"] = mtype
+        # 1. Fetch details for nice title
+        details = await get_tmdb_details(tmdb_id, mtype)
+        if details:
+            clean_title = details.get("name") or details.get("title") or "Untitled"
+            year = (details.get("first_air_date") or details.get("release_date") or "")[:4]
 
-    if mtype == "tv":
-        group_states[user_id]["state"] = "wait_group_season"
-        await callback.edit_message_text("✅ Series selected.\n\n**Enter Season Number:** (e.g. 1)")
-    else:
-        # Movie -> Proceed
-        group_states[user_id]["season"] = None
-        await callback.message.delete()
-        await finish_create_group(client, user_id, callback.message)
+            if mtype == "tv" and season:
+                group_title = f"{clean_title} S{season}"
+            else:
+                group_title = f"{clean_title} ({year})"
+        else:
+            group_title = f"Group {tmdb_id}"
+
+        # 2. Find bundles
+        query = {
+            "tmdb_id": str(tmdb_id),
+            "media_type": mtype
+        }
+        if season is not None:
+            query["season"] = int(season)
+
+        cursor = db.bundles_col.find(query)
+        bundles = await cursor.to_list(length=100)
+        bundle_codes = [b["code"] for b in bundles]
+
+        # 3. Create
+        code = generate_random_code()
+        await db.create_group(code, group_title, tmdb_id, mtype, season, bundle_codes)
+
+        await callback.edit_message_text(
+            f"✅ **Group Created!**\n\n"
+            f"Title: `{group_title}`\n"
+            f"Bundles: `{len(bundle_codes)}`\n\n"
+            f"Code: `{code}`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_grouped_bundles")]])
+        )
+
+    except Exception as e:
+        logger.error(f"Group create error: {e}")
+        await callback.edit_message_text(f"❌ Error: {e}")
 
 @Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel"]), group=3)
 async def group_input_handler(client, message):
@@ -246,32 +308,4 @@ async def group_input_handler(client, message):
         await db.update_group_title(code, new_title)
         await message.reply(f"✅ Group renamed to: `{new_title}`")
         del group_states[user_id]
-        return
-
-    if s_key == "wait_group_tmdb":
-        try:
-            tmdb_id = message.text.strip() # keep as string for flexibility? db uses string.
-            if not tmdb_id.isdigit():
-                 await message.reply("❌ ID must be numeric.")
-                 return
-
-            # Ask Type
-            group_states[user_id] = {"state": "wait_group_type", "tmdb_id": tmdb_id}
-
-            markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎬 Movie", callback_data="grp_type_movie")],
-                [InlineKeyboardButton("📺 Series", callback_data="grp_type_tv")]
-            ])
-            await message.reply(f"✅ ID: `{tmdb_id}`\n\n**Select Type:**", reply_markup=markup)
-        except Exception as e:
-            await message.reply(f"❌ Error: {e}")
-        return
-
-    if s_key == "wait_group_season":
-        try:
-            season = int(message.text.strip())
-            state["season"] = season
-            await finish_create_group(client, user_id, message)
-        except:
-            await message.reply("❌ Invalid number.")
         return

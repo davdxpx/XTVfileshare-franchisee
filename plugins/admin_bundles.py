@@ -407,6 +407,25 @@ async def finalize_bundle(client, user_id, message_obj):
             episode_count_total=data.get("episode_count")
         )
 
+        # Get TMDb Cache Title if possible
+        tmdb_title_cache = None
+        tmdb_year_cache = None
+
+        if data.get("tmdb_id"):
+             details = await get_tmdb_details(data.get("tmdb_id"), data.get("media_type"))
+             if details:
+                 tmdb_title_cache = details.get("name") or details.get("title")
+                 date = details.get("release_date") or details.get("first_air_date") or ""
+                 tmdb_year_cache = date[:4] if date else ""
+
+        # Update Bundle with Cached Metadata (Async update after insert or re-insert?)
+        # Better to update the doc we just inserted or update create_bundle to accept kwargs properly (it does).
+        # But we already called create_bundle above. Let's just update it.
+        await db.bundles_col.update_one(
+            {"code": code},
+            {"$set": {"tmdb_title": tmdb_title_cache, "tmdb_year": tmdb_year_cache}}
+        )
+
         # Auto Grouping
         group_title, group_code = await auto_group_bundle(
             client, code, data.get("tmdb_id"),
