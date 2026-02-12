@@ -11,6 +11,7 @@ class Database:
         self.db = None
         self.channels_col = None
         self.bundles_col = None
+        self.groups_col = None
         self.configs_col = None
         self.tasks_col = None
         self.users_col = None
@@ -26,6 +27,7 @@ class Database:
 
             self.channels_col = self.db.channels
             self.bundles_col = self.db.bundles
+            self.groups_col = self.db.groups
             self.configs_col = self.db.configs
             self.tasks_col = self.db.tasks
             self.users_col = self.db.users
@@ -379,5 +381,59 @@ class Database:
         # Return reversed (newest first)
         hist = user.get("history", [])
         return list(reversed(hist))
+
+    # --- Groups ---
+    async def create_group(self, code, title, tmdb_id, media_type, season, bundles=None):
+        doc = {
+            "code": code,
+            "title": title,
+            "tmdb_id": str(tmdb_id) if tmdb_id else None,
+            "media_type": media_type,
+            "season": int(season) if season is not None else None,
+            "bundles": bundles or [],
+            "created_at": time.time()
+        }
+        await self.groups_col.insert_one(doc)
+        return doc
+
+    async def get_group(self, code):
+        return await self.groups_col.find_one({"code": code})
+
+    async def get_group_by_bundle(self, bundle_code):
+        return await self.groups_col.find_one({"bundles": bundle_code})
+
+    async def get_group_by_tmdb(self, tmdb_id, media_type, season=None):
+        if not tmdb_id: return None
+        query = {
+            "tmdb_id": str(tmdb_id),
+            "media_type": media_type
+        }
+        if media_type == "tv" and season is not None:
+            query["season"] = int(season)
+        return await self.groups_col.find_one(query)
+
+    async def add_bundle_to_group(self, group_code, bundle_code):
+        await self.groups_col.update_one(
+            {"code": group_code},
+            {"$addToSet": {"bundles": bundle_code}}
+        )
+
+    async def remove_bundle_from_group(self, group_code, bundle_code):
+        await self.groups_col.update_one(
+            {"code": group_code},
+            {"$pull": {"bundles": bundle_code}}
+        )
+
+    async def update_group_title(self, group_code, new_title):
+        await self.groups_col.update_one(
+            {"code": group_code},
+            {"$set": {"title": new_title}}
+        )
+
+    async def delete_group(self, group_code):
+        await self.groups_col.delete_one({"code": group_code})
+
+    async def get_all_groups(self):
+        return await self.groups_col.find({}).to_list(length=1000)
 
 db = Database()

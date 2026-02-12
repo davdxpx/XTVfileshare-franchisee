@@ -3,7 +3,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from config import Config
 from db import db
 from utils.helpers import generate_random_code, get_file_id
-from utils.tmdb import search_tmdb
+from utils.tmdb import search_tmdb, get_tmdb_details
 from log import get_logger
 import asyncio
 
@@ -150,7 +150,7 @@ async def on_text_input(client, message):
         # Simpler: If subs, we might need to ask "Movie or Series?" before?
         # But for now, let's treat subs same as Series if user implies Series structure (S1 E1).
 
-        results = search_tmdb(query, search_type)
+        results = await search_tmdb(query, search_type)
 
         if not results:
             await message.reply("❌ No results found on TMDb. Try another title.")
@@ -299,6 +299,38 @@ async def on_eps_select(client, callback):
         admin_states[user_id]["step"] = "wait_manual_eps"
         await callback.edit_message_text("⌨️ **Enter Episodes:**\n\nExamples: `1-5` or `1,3,5`")
 
+async def auto_group_bundle(client, bundle_code, tmdb_id, media_type, season, bundle_title):
+    if not tmdb_id:
+        return None, None
+
+    # Check if group exists
+    group = await db.get_group_by_tmdb(tmdb_id, media_type, season)
+
+    if group:
+        await db.add_bundle_to_group(group["code"], bundle_code)
+        logger.info(f"Auto-grouped bundle {bundle_code} into {group['title']}")
+        return group["title"], group["code"]
+    else:
+        # Create new group
+        details = await get_tmdb_details(tmdb_id, media_type)
+
+        if details:
+            clean_title = details.get("name") or details.get("title") or "Untitled"
+            year = (details.get("first_air_date") or details.get("release_date") or "")[:4]
+
+            if media_type == "tv" and season:
+                group_title = f"{clean_title} S{season}"
+            else:
+                group_title = f"{clean_title} ({year})"
+        else:
+            # Fallback
+            group_title = bundle_title or f"Group {tmdb_id}"
+
+        code = generate_random_code()
+        await db.create_group(code, group_title, tmdb_id, media_type, season, [bundle_code])
+        logger.info(f"Created new group {group_title} for {bundle_code}")
+        return group_title, code
+
 async def finalize_bundle(client, user_id, message_obj):
     state = admin_states[user_id]
     data = state["data"]
@@ -375,16 +407,28 @@ async def finalize_bundle(client, user_id, message_obj):
             episode_count_total=data.get("episode_count")
         )
 
+        # Auto Grouping
+        group_title, group_code = await auto_group_bundle(
+            client, code, data.get("tmdb_id"),
+            data.get("media_type"), data.get("season_number"), bundle_title
+        )
+
         bot_username = Config.BOT_USERNAME
         link = f"https://t.me/{bot_username}?start={code}"
 
-        await status_msg.edit(
+        msg_text = (
             f"✅ **Bundle Created!**\n\n"
             f"🎬 Type: {data.get('media_type')}\n"
             f"🆔 TMDb: {data.get('tmdb_id')}\n"
             f"📄 Files: {len(file_ids)}\n"
             f"🔗 Link: `{link}`"
         )
+
+        if group_title:
+            group_link = f"https://t.me/{bot_username}?start=group_{group_code}"
+            msg_text += f"\n\n🔗 **Group:** `{group_title}`\n🔗 **Group Link:** `{group_link}`"
+
+        await status_msg.edit(msg_text)
 
         del admin_states[user_id]
 
