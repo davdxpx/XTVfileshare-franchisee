@@ -383,13 +383,14 @@ class Database:
         return list(reversed(hist))
 
     # --- Groups ---
-    async def create_group(self, code, title, tmdb_id, media_type, season, bundles=None):
+    async def create_group(self, code, title, tmdb_id, media_type, season, bundles=None, episode_val=None):
         doc = {
             "code": code,
             "title": title,
             "tmdb_id": str(tmdb_id) if tmdb_id else None,
             "media_type": media_type,
             "season": int(season) if season is not None else None,
+            "episode_val": str(episode_val) if episode_val else None, # Store as string for flexibility (e.g. "1-5", "All")
             "bundles": bundles or [],
             "created_at": time.time()
         }
@@ -402,7 +403,7 @@ class Database:
     async def get_group_by_bundle(self, bundle_code):
         return await self.groups_col.find_one({"bundles": bundle_code})
 
-    async def get_group_by_tmdb(self, tmdb_id, media_type, season=None):
+    async def get_group_by_tmdb(self, tmdb_id, media_type, season=None, episode_val=None):
         if not tmdb_id: return None
         query = {
             "tmdb_id": str(tmdb_id),
@@ -410,6 +411,18 @@ class Database:
         }
         if media_type == "tv" and season is not None:
             query["season"] = int(season)
+
+        if episode_val:
+            query["episode_val"] = str(episode_val)
+        else:
+            # If no episode specified, we look for group where episode_val is NULL or "All"
+            # But "All" is a valid value.
+            # Usually groups are strict.
+            # If scanning entire season, we expect episode_val to be None or "All".
+            # Let's say: exact match or exists check.
+            # For simplicity: strict match.
+            query["episode_val"] = None
+
         return await self.groups_col.find_one(query)
 
     async def add_bundle_to_group(self, group_code, bundle_code):
