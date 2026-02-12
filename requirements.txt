@@ -4,3 +4,4 @@ python-dotenv
 tgcrypto
 requests
 psutil
+aiohttp
