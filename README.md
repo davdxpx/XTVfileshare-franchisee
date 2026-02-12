@@ -147,7 +147,7 @@ If you need assistance, encounter bugs, or want to purchase a license/custom ver
 
 <div align="center">
     <p>
-        &copy; 2024 <strong>𝕏0L0™</strong>. All Rights Reserved.<br>
+        &copy; 2026 <strong>𝕏0L0™</strong>. All Rights Reserved.<br>
         <em>Developed with ❤️ by @davdxpx</em>
     </p>
 </div>
