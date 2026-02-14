@@ -7,10 +7,16 @@ class Config:
     API_ID = int(os.getenv("API_ID", "0"))
     API_HASH = os.getenv("API_HASH", "")
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-    MONGO_URI = os.getenv("MONGO_URI", "")
 
-    # Database - User DB defaults to Main DB if not set
-    USER_DB_URI = os.getenv("USER_DB_URI", MONGO_URI)
+    # 3-DB Architecture Preparation
+    # MainDB (Read-Only Global Content)
+    MAIN_URI = os.getenv("MAIN_URI", os.getenv("MONGO_URI", ""))
+
+    # UserDB (Shared Read-Write Users)
+    USER_URI = os.getenv("USER_URI", MAIN_URI)
+
+    # PrivateDB (Local Franchisee Data/Cache)
+    PRIVATE_URI = os.getenv("PRIVATE_URI", MAIN_URI)
 
     # Identities
     CEO_ID = int(os.getenv("CEO_ID", "0"))
@@ -41,7 +47,7 @@ class Config:
     BOT_USERNAME = ""
 
     # Bot Version
-    BOT_VERSION = "1.7.0"
+    BOT_VERSION = "1.8.0"
 
     # Start Time
     START_TIME = None

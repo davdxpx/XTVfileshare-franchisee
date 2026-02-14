@@ -21,7 +21,8 @@ async def run_backup(client):
 
     # Construct mongodump command
     # Mask password for logging if needed, but here we construct cmd string
-    uri = Config.MONGO_URI
+    # Use MAIN_URI as per 3-DB architecture (MONGO_URI deprecated/fallback)
+    uri = Config.MAIN_URI
 
     # Using shell execution
     cmd = f"mongodump --uri=\"{uri}\" --out=\"{backup_dir}\" --gzip"

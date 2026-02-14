@@ -9,12 +9,14 @@ class Database:
     def __init__(self):
         self.client_main = None
         self.client_user = None
+        self.client_private = None
 
         self.db_main = None
         self.db_user = None
-        self.db_request = None # Logic for xtv_requests
+        self.db_private = None
+        self.db_request = None
 
-        # MainDB Collections
+        # MainDB Collections (Global Read-Only Content)
         self.channels_col = None
         self.bundles_col = None
         self.groups_col = None
@@ -25,35 +27,48 @@ class Database:
         self.force_shares_col = None
         self.delete_queue_col = None
 
-        # UserDB Collections
+        # UserDB Collections (Shared Read-Write)
         self.users_col = None
+
+        # PrivateDB Collections (Local Cache/Config)
+        self.local_cache_col = None
 
         # RequestDB Collection
         self.requests_col = None
 
     def connect(self):
         try:
-            # 1. MainDB Connection
-            self.client_main = AsyncIOMotorClient(Config.MONGO_URI)
+            # 1. MainDB Connection (Global Content)
+            # Use Config.MAIN_URI
+            self.client_main = AsyncIOMotorClient(Config.MAIN_URI)
             try:
                 self.db_main = self.client_main.get_database()
             except Exception:
-                self.db_main = self.client_main["fileshare_bot"]
+                self.db_main = self.client_main["fileshare_bot_main"]
 
-            # 2. UserDB Connection
-            if Config.USER_DB_URI == Config.MONGO_URI:
+            # 2. UserDB Connection (Global Users)
+            if Config.USER_URI == Config.MAIN_URI:
                 self.client_user = self.client_main
                 self.db_user = self.db_main
             else:
-                self.client_user = AsyncIOMotorClient(Config.USER_DB_URI)
+                self.client_user = AsyncIOMotorClient(Config.USER_URI)
                 try:
                     self.db_user = self.client_user.get_database()
                 except Exception:
-                    self.db_user = self.client_user["fileshare_bot_users"] # Default fallback
+                    self.db_user = self.client_user["fileshare_bot_users"]
 
-            # 3. RequestDB Connection (Inside MainDB Cluster/Conn)
-            # User said: "It has the folder requests... is called xtv_requests"
-            # Assuming it is a sibling database named "xtv_requests"
+            # 3. PrivateDB Connection (Local Cache)
+            if Config.PRIVATE_URI == Config.MAIN_URI:
+                self.client_private = self.client_main
+                self.db_private = self.db_main
+            else:
+                self.client_private = AsyncIOMotorClient(Config.PRIVATE_URI)
+                try:
+                    self.db_private = self.client_private.get_database()
+                except Exception:
+                    self.db_private = self.client_private["fileshare_bot_private"]
+
+            # 4. RequestDB (Inside MainDB Cluster)
             self.db_request = self.client_main["xtv_requests"]
             self.requests_col = self.db_request["requests"]
 
@@ -63,14 +78,16 @@ class Database:
             self.groups_col = self.db_main.groups
             self.configs_col = self.db_main.configs
             self.tasks_col = self.db_main.tasks
-            self.coupons_col = self.db_main.coupons # Global coupons
-            self.logs_col = self.db_main.logs # Audit logs
+            self.coupons_col = self.db_main.coupons
+            self.logs_col = self.db_main.logs
             self.force_shares_col = self.db_main.force_shares
             self.delete_queue_col = self.db_main.delete_queue
 
-            self.users_col = self.db_user.users # Global Users
+            self.users_col = self.db_user.users
 
-            logger.info("Connected to MongoDB (MainDB & UserDB)")
+            self.local_cache_col = self.db_private.local_cache
+
+            logger.info("Connected to MongoDB (MainDB, UserDB, PrivateDB)")
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
             raise e
@@ -120,14 +137,13 @@ class Database:
         return await cursor.to_list(length=100)
 
     async def get_franchise_channels(self):
-        # Franchise channels are type='force_sub' AND is_franchise=True
         cursor = self.channels_col.find({"approved": True, "is_franchise": True})
         return await cursor.to_list(length=100)
 
     async def set_channel_franchise_status(self, chat_id, is_franchise):
         await self.channels_col.update_one(
             {"chat_id": chat_id},
-            {"$set": {"is_franchise": is_franchise, "type": "force_sub"}} # Enforce force_sub type
+            {"$set": {"is_franchise": is_franchise, "type": "force_sub"}}
         )
 
     async def is_channel_approved(self, chat_id):
@@ -287,6 +303,10 @@ class Database:
         user = await self.users_col.find_one({"user_id": user_id})
         return user.get("referral_count", 0) if user else 0
 
+    async def get_user_origin(self, user_id):
+        user = await self.users_col.find_one({"user_id": user_id})
+        return user.get("origin_bot_id") if user else None
+
     # --- Auto-Delete ---
     async def add_to_delete_queue(self, chat_id, message_ids, delete_at):
         await self.delete_queue_col.insert_one({
@@ -405,8 +425,6 @@ class Database:
 
     async def add_user_history(self, user_id, code, title, limit=3):
         now = time.time()
-        # Network History: Configurable Limit, Auto-delete via Lazy Check
-        # Slice is negative for "last N items"
         slice_val = -abs(limit)
         await self.users_col.update_one(
             {"user_id": user_id},
@@ -434,7 +452,6 @@ class Database:
              )
 
     async def get_user_history(self, user_id):
-        # Trigger prune before returning
         await self.prune_user_history(user_id)
 
         user = await self.users_col.find_one({"user_id": user_id})

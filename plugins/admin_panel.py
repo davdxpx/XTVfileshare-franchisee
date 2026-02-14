@@ -19,21 +19,22 @@ async def show_main_menu(message_or_callback):
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings_menu")
+            InlineKeyboardButton("🏢 Franchise Dashboard", callback_data="admin_franchise_dash")
         ],
         [
-            InlineKeyboardButton("💰 Monetization", callback_data="admin_monetization"),
-            InlineKeyboardButton("🚀 Community Growth", callback_data="admin_growth")
+            InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings_menu"),
+            InlineKeyboardButton("💰 Monetization", callback_data="admin_monetization")
         ],
         [
-            InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles"),
-            InlineKeyboardButton("📦 Grouped Bundles", callback_data="admin_grouped_bundles")
+            InlineKeyboardButton("🚀 Community Growth", callback_data="admin_growth"),
+            InlineKeyboardButton("📦 Bundles", callback_data="admin_bundles")
         ],
         [
-            InlineKeyboardButton("📢 Channels", callback_data="admin_channels_menu"),
-            InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks")
+            InlineKeyboardButton("📦 Grouped Bundles", callback_data="admin_grouped_bundles"),
+            InlineKeyboardButton("📢 Channels", callback_data="admin_channels_menu")
         ],
         [
+            InlineKeyboardButton("📝 Tasks", callback_data="admin_tasks"),
             InlineKeyboardButton("❌ Close", callback_data="admin_close")
         ]
     ])
@@ -52,6 +53,28 @@ async def close_panel(client, callback):
     await callback.message.delete()
 
 # --- Stats ---
+
+# --- Franchise Dashboard ---
+
+@Client.on_callback_query(filters.regex(r"^admin_franchise_dash$"))
+async def show_franchise_dash(client, callback):
+    # Placeholder Stats for now
+    total_users = await db.get_total_users()
+    active_fracs = 1 # Just this one for now
+
+    text = (
+        "**🏢 Franchise Dashboard**\n\n"
+        "🌐 **Network Stats:**\n"
+        f"• Total Users (Global): `{total_users}`\n"
+        f"• Active Franchisees: `{active_fracs}`\n"
+        "• Network Status: 🟢 Online\n\n"
+        "__Growth Tips:__\n"
+        "💡 Invite more users to unlock higher tiers!\n"
+        "💡 Share exclusive bundles to boost retention."
+    )
+
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_main")]])
+    await callback.edit_message_text(text, reply_markup=markup)
 
 @Client.on_callback_query(filters.regex(r"^admin_stats$"))
 async def show_stats(client, callback):
