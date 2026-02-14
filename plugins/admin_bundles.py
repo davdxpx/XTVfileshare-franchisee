@@ -424,6 +424,8 @@ async def finalize_bundle(client, user_id, message_obj):
             episode_count_total=data.get("episode_count")
         )
 
+        await db.add_log("create_bundle", user_id, f"Created {code} ({bundle_title})")
+
         # Get TMDb Cache Title if possible
         tmdb_title_cache = None
         tmdb_year_cache = None
@@ -442,6 +444,14 @@ async def finalize_bundle(client, user_id, message_obj):
             {"code": code},
             {"$set": {"tmdb_title": tmdb_title_cache, "tmdb_year": tmdb_year_cache}}
         )
+
+        # Mark Request as Done (Integration)
+        if data.get("tmdb_id") and data.get("media_type"):
+             try:
+                 await db.mark_request_done(data.get("tmdb_id"), data.get("media_type"))
+                 logger.info(f"Marked request {data.get('tmdb_id')} as done.")
+             except Exception as e:
+                 logger.error(f"Failed to mark request done: {e}")
 
         # Auto Grouping
         group_title, group_code = await auto_group_bundle(

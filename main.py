@@ -1,11 +1,46 @@
 import asyncio
 import time
+import sys
 from pyrogram import Client, idle
 from config import Config
 from db import db
 from log import get_logger
+from utils.backup import run_backup
 
 logger = get_logger(__name__)
+
+async def check_ceo_security():
+    # Verify CEO_ID against DB
+    stored_owner = await db.get_config("owner_id")
+    if stored_owner is None:
+        # First time setup
+        if Config.CEO_ID:
+            await db.update_config("owner_id", Config.CEO_ID)
+            logger.info(f"Owner ID initialized to {Config.CEO_ID}")
+    else:
+        if Config.CEO_ID and stored_owner != Config.CEO_ID:
+            logger.critical(f"SECURITY ALERT: CEO_ID mismatch! Env: {Config.CEO_ID}, DB: {stored_owner}")
+            sys.exit("SECURITY ALERT: CEO_ID mismatch. Self-destructing.")
+
+async def backup_loop(app):
+    logger.info("Starting Backup Loop...")
+    while True:
+        try:
+            # Check last backup time
+            last_backup = await db.get_config("last_backup_ts", 0)
+            now = time.time()
+
+            # 24 hours = 86400 seconds
+            if now - last_backup >= 86400:
+                success = await run_backup(app)
+                if success:
+                    await db.update_config("last_backup_ts", now)
+
+            # Check every hour
+            await asyncio.sleep(3600)
+        except Exception as e:
+            logger.error(f"Backup Loop Error: {e}")
+            await asyncio.sleep(3600)
 
 async def seed_tasks():
     # Check if tasks exist
@@ -57,6 +92,9 @@ async def main():
     # Connect to Database
     db.connect()
 
+    # Security Check
+    await check_ceo_security()
+
     # Seed Data
     await seed_tasks()
 
@@ -79,6 +117,7 @@ async def main():
 
     # Start Background Tasks
     asyncio.create_task(auto_delete_loop(app))
+    asyncio.create_task(backup_loop(app))
 
     # Warmup Peer Cache
     logger.info("Warming up peer cache...")

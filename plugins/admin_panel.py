@@ -96,6 +96,7 @@ async def admin_channels_menu(client, callback):
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗄️ DB Channels (Storage)", callback_data="admin_channels")],
         [InlineKeyboardButton("🔒 Force-Sub Channels", callback_data="admin_force_subs")],
+        [InlineKeyboardButton("🏢 Franchise Channels", callback_data="admin_franchise_channels")],
         [InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
@@ -449,6 +450,38 @@ async def show_force_subs(client, callback):
 
     await callback.edit_message_text("**🔒 Force Sub Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
 
+# --- Franchise Channels ---
+
+@Client.on_callback_query(filters.regex(r"^admin_franchise_channels$"))
+async def show_franchise_channels(client, callback):
+    channels = await db.get_franchise_channels()
+
+    markup = []
+    if channels:
+        for ch in channels:
+            markup.append([
+                InlineKeyboardButton(f"{ch.get('title')} ({ch.get('chat_id')})", callback_data=f"view_ch|{ch.get('chat_id')}")
+            ])
+    else:
+        markup.append([InlineKeyboardButton("No Franchise channels.", callback_data="noop")])
+
+    markup.append([InlineKeyboardButton("➕ Add Franchise Channel", callback_data="panel_add_franchise_manual")])
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")])
+
+    await callback.edit_message_text("**🏢 Franchise Channels**\nGlobal mandatory channels:\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
+
+@Client.on_callback_query(filters.regex(r"^panel_add_franchise_manual$"))
+async def panel_add_franchise_manual(client, callback):
+    panel_states[callback.from_user.id] = "wait_franchise_input"
+    await callback.message.delete()
+    await client.send_message(
+        callback.from_user.id,
+        "**➕ Add Franchise Channel**\n\n"
+        "Please add the bot as Admin to the channel first!\n\n"
+        "Then send the **Channel ID** or **Username**.\n"
+        "Or forward a message from it."
+    )
+
 @Client.on_callback_query(filters.regex(r"^view_ch\|"))
 async def view_channel(client, callback):
     chat_id = int(callback.data.split("|")[1])
@@ -641,6 +674,7 @@ async def handle_panel_input(client, message):
         try:
             val = int(message.text.strip())
             await db.update_config("auto_delete_time", val)
+            await db.add_log("config_update", user_id, f"Auto-Delete set to {val}")
             await message.reply(f"✅ Auto-Delete set to {val} mins.")
         except:
             await message.reply("❌ Invalid number.")
@@ -672,6 +706,7 @@ async def handle_panel_input(client, message):
             reward = raw_state["reward"]
 
             await db.create_coupon(code, reward, limit)
+            await db.add_log("create_coupon", user_id, f"Created {code}")
             await message.reply(f"✅ Coupon Created!\n`{code}` -> {reward}h (Max {limit})")
             del panel_states[user_id]
             await show_main_menu(message)
@@ -682,6 +717,7 @@ async def handle_panel_input(client, message):
     if state_key == "wait_coupon_del":
         code = message.text.strip().upper()
         await db.delete_coupon(code)
+        await db.add_log("delete_coupon", user_id, f"Deleted {code}")
         await message.reply(f"✅ Coupon `{code}` deleted (if it existed).")
         del panel_states[user_id]
         await show_main_menu(message)
@@ -691,6 +727,7 @@ async def handle_panel_input(client, message):
         try:
             val = int(message.text)
             await db.update_config("daily_bonus_reward", val)
+            await db.add_log("config_update", user_id, f"Daily Reward set to {val}")
             await message.reply(f"✅ Daily Reward set to {val} hours.")
         except:
             await message.reply("❌ Number.")
@@ -712,6 +749,7 @@ async def handle_panel_input(client, message):
             days = float(message.text.strip())
             target_id = raw_state["target_id"]
             await db.add_premium_user(target_id, days)
+            await db.add_log("add_premium", user_id, f"Added Premium to {target_id} ({days}d)")
             await message.reply(f"✅ User {target_id} is now Premium for {days} days.")
         except:
             await message.reply("❌ Invalid number.")
@@ -723,6 +761,7 @@ async def handle_panel_input(client, message):
         try:
             target_id = int(message.text.strip())
             await db.remove_premium_user(target_id)
+            await db.add_log("remove_premium", user_id, f"Removed Premium from {target_id}")
             await message.reply(f"✅ User {target_id} removed from Premium.")
         except:
             await message.reply("❌ Invalid ID.")
@@ -757,6 +796,7 @@ async def handle_panel_input(client, message):
         code = raw_state["code"]
         new_title = message.text
         await db.update_bundle_title(code, new_title)
+        await db.add_log("rename_bundle", user_id, f"Renamed {code} to {new_title}")
         await message.reply(f"✅ Bundle renamed to: `{new_title}`")
         del panel_states[user_id]
         await show_main_menu(message)
@@ -813,6 +853,43 @@ async def handle_panel_input(client, message):
 
             await db.add_channel(chat_id, chat.title, chat.username, "force_sub", invite)
             await message.reply(f"✅ Added **{chat.title}** as Force Sub channel.")
+            del panel_states[user_id]
+            await show_main_menu(message)
+        except Exception as e:
+            await message.reply(f"❌ Error adding channel: {e}")
+
+    elif state_key == "wait_franchise_input":
+        text = message.text
+        chat_id = None
+        if text.lstrip("-").isdigit():
+            chat_id = int(text)
+        elif text.startswith("@"):
+            try:
+                chat = await client.get_chat(text)
+                chat_id = chat.id
+            except Exception:
+                await message.reply("❌ Could not resolve username.")
+                return
+        elif message.forward_from_chat:
+             chat_id = message.forward_from_chat.id
+        else:
+             await message.reply("❌ Invalid input.")
+             return
+
+        try:
+            chat = await client.get_chat(chat_id)
+            invite = None
+            try:
+                invite_obj = await client.create_chat_invite_link(chat_id, name="Fileshare Bot Franchise")
+                invite = invite_obj.invite_link
+            except:
+                invite = chat.invite_link
+
+            # Add with force_sub type AND is_franchise=True
+            await db.add_channel(chat_id, chat.title, chat.username, "force_sub", invite)
+            await db.set_channel_franchise_status(chat_id, True)
+
+            await message.reply(f"✅ Added **{chat.title}** as Franchise Channel.")
             del panel_states[user_id]
             await show_main_menu(message)
         except Exception as e:

@@ -74,7 +74,7 @@ async def prem_history(client, callback):
         await callback.answer("No history yet.", show_alert=True)
         return
 
-    text = "**📂 My Recent History**\n\n"
+    text = "**📂 Network History**\n__(Last 3 items, auto-deleted after 3h)__\n\n"
     for item in history:
         title = item.get("title", "Unknown")[:30]
         code = item.get("code")

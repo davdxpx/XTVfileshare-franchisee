@@ -8,8 +8,25 @@ class Config:
     API_HASH = os.getenv("API_HASH", "")
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     MONGO_URI = os.getenv("MONGO_URI", "")
-    ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+    # Database - User DB defaults to Main DB if not set
+    USER_DB_URI = os.getenv("USER_DB_URI", MONGO_URI)
+
+    # Identities
+    CEO_ID = int(os.getenv("CEO_ID", "0"))
+    ADMIN_ID = int(os.getenv("ADMIN_ID", "0")) # Legacy
+
+    # Admins List
+    ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+    if ADMIN_ID:
+        ADMIN_IDS.add(ADMIN_ID)
+    if CEO_ID:
+        ADMIN_IDS.add(CEO_ID)
+
     TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
+
+    # Channels
+    BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))
 
     # Default Configs (fallback if DB empty)
     DEFAULT_DELAY = 0  # No delay as per clarification
@@ -24,7 +41,7 @@ class Config:
     BOT_USERNAME = ""
 
     # Bot Version
-    BOT_VERSION = "1.6.7"
+    BOT_VERSION = "1.7.0"
 
     # Start Time
     START_TIME = None
