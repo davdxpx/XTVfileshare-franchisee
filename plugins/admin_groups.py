@@ -128,6 +128,7 @@ async def remove_bundle_from_group(client, callback):
 async def del_group_confirm(client, callback):
     code = callback.data.split("|")[1]
     await db.delete_group(code)
+    await db.add_log("delete_group", callback.from_user.id, f"Deleted {code}")
     await callback.answer("Group deleted!", show_alert=True)
     await list_groups(client, callback)
 
@@ -341,6 +342,15 @@ async def create_group_click(client, callback):
         code = generate_random_code()
         await db.create_group(code, group_title, tmdb_id, mtype, season, bundle_codes, target_ep)
 
+        await db.add_log("create_group", callback.from_user.id, f"Created {group_title} ({code})")
+
+        # Mark Request as Done
+        try:
+             await db.mark_request_done(tmdb_id, mtype)
+             logger.info(f"Marked request {tmdb_id} as done via Group Wizard.")
+        except Exception as e:
+             logger.error(f"Failed to mark request done: {e}")
+
         await callback.edit_message_text(
             f"✅ **Group Created!**\n\n"
             f"Title: `{group_title}`\n"
@@ -366,6 +376,7 @@ async def group_input_handler(client, message):
         new_title = message.text.strip()
         code = state["code"]
         await db.update_group_title(code, new_title)
+        await db.add_log("rename_group", user_id, f"Renamed {code} to {new_title}")
         await message.reply(f"✅ Group renamed to: `{new_title}`")
         del group_states[user_id]
         return

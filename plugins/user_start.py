@@ -35,7 +35,10 @@ async def deliver_bundle(client, user_id, chat_id, code):
 
     # Add to History (New Feature)
     bundle_title = bundle.get("title", "Unknown Bundle")
-    await db.add_user_history(user_id, code, bundle_title)
+
+    # Premium Limit (10 vs 3)
+    limit = 10 if await db.is_premium_user(user_id) else 3
+    await db.add_user_history(user_id, code, bundle_title, limit=limit)
 
     if tmdb_id:
         details = await get_tmdb_details(tmdb_id, media_type)
@@ -236,6 +239,14 @@ async def start_handler(client: Client, message: Message):
         return
 
     code = args[1]
+
+    # Ensure User (Network History & Origin)
+    try:
+        me = await client.get_me()
+        await db.ensure_user(user_id, origin_bot_id=me.id)
+    except Exception as e:
+        logger.error(f"Ensure user failed: {e}")
+        await db.ensure_user(user_id) # Fallback
 
     # --- Referral Logic ---
     if code.startswith("ref_"):

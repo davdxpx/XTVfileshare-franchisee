@@ -125,3 +125,81 @@ async def redeem_command(client, message):
             await message.reply("❌ This coupon has reached its usage limit.")
         else:
             await message.reply("❌ Invalid Code.")
+
+# Quest logic is in plugins/user_start.py and plugins/quest.py
+# This file handles shared features like Referrals, Coupons, Daily Bonus.
+
+async def process_referral_reward(client, referrer_id):
+    # Increment count
+    new_count = await db.increment_referral(referrer_id)
+    # Check Target
+    target = await db.get_config("referral_target", 10)
+
+    # Notify Referrer (Optional, maybe not every single one?)
+    # "👤 New User Joined! (1/10)"
+    try:
+        await client.send_message(referrer_id, f"👤 **New User Joined!**\n\nProgress: `{new_count}/{target}`")
+    except: pass
+
+    if new_count >= target:
+        # Check if already rewarded for this cycle?
+        # Ideally we reset count or allow multiple cycles.
+        # Simple Logic: Every multiple of target? Or just once?
+        # User implies "Invite 10 -> Reward". Resetting count is cleaner or tracking cycles.
+        # Let's assume One-Time or Cumulative.
+        # If Cumulative: if new_count % target == 0
+        if new_count % target == 0:
+            reward_hours = await db.get_config("referral_reward_hours", 24)
+            await db.add_premium_user(referrer_id, reward_hours / 24.0)
+            try:
+                await client.send_message(referrer_id, f"🎉 **Target Reached!**\n\nYou invited {target} users!\n🎁 **Reward:** {reward_hours}h Premium Access granted!")
+            except: pass
+
+@Client.on_callback_query(filters.regex(r"^ref_verify\|"))
+async def ref_verify_callback(client, callback):
+    # Data: ref_verify|chat_id|referrer_id
+    try:
+        parts = callback.data.split("|")
+        chat_id = int(parts[1])
+        referrer_id = int(parts[2])
+        user_id = callback.from_user.id
+
+        # Verify Membership
+        try:
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["left", "kicked", "banned"]:
+                await callback.answer("❌ You haven't joined yet!", show_alert=True)
+                return
+        except Exception as e:
+             # If bot can't see, we might assume success or fail.
+             # Fail is safer.
+             await callback.answer(f"❌ Verification failed. Try again in a moment.", show_alert=True)
+             return
+
+        # Success!
+        await callback.message.delete()
+        await callback.answer("✅ Success! Welcome!")
+
+        # Check Cross-Franchise Bonus
+        try:
+            me = await client.get_me()
+            referrer_origin = await db.get_user_origin(referrer_id)
+            # If referrer is from another bot (and not None)
+            if referrer_origin and referrer_origin != me.id:
+                # Grant Bonus
+                bonus_hours = await db.get_config("cross_ref_bonus", 6)
+                await db.add_premium_user(referrer_id, bonus_hours / 24.0)
+                try:
+                    await client.send_message(referrer_id, f"🌐 **Cross-Franchise Bonus!**\n\n+ {bonus_hours}h Premium for inviting a user from another network node!")
+                except: pass
+        except Exception as e:
+            logger.error(f"Cross-ref check failed: {e}")
+
+        # Reward
+        await process_referral_reward(client, referrer_id)
+
+        # Send Welcome Msg
+        await client.send_message(user_id, "👋 **Welcome to XTV Fileshare Bot!**\n\nYou can now use the bot freely.")
+
+    except Exception as e:
+        logger.error(f"Ref verify error: {e}")

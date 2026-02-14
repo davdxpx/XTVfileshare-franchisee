@@ -79,6 +79,7 @@ async def handle_channel_decision(client: Client, callback: CallbackQuery):
                     invite_link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
 
             await db.add_channel(chat_id, chat.title, chat.username, ctype, invite_link)
+            await db.add_log("add_channel", callback.from_user.id, f"Added {chat.title} ({chat_id}) as {ctype}")
 
             label = "Storage Channel" if ctype == "storage" else "Force Sub Channel"
             await callback.edit_message_text(
@@ -95,6 +96,7 @@ async def handle_channel_decision(client: Client, callback: CallbackQuery):
         # Maybe leave the chat?
         try:
             await client.leave_chat(chat_id)
+            await db.add_log("reject_channel", callback.from_user.id, f"Rejected {chat_id}")
             await callback.edit_message_text(f"❌ **Channel Rejected**\nID: `{chat_id}`\nBot left the channel.")
         except Exception as e:
             await callback.edit_message_text(f"❌ **Channel Rejected**\nID: `{chat_id}`\n(Failed to leave: {e})")
