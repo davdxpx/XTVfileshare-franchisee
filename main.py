@@ -165,8 +165,21 @@ async def main():
 
     me = await app.get_me()
     Config.BOT_USERNAME = me.username
-    logger.info(f"Bot started as @{me.username}")
-    logger.info("🚀 Bot is running! Developed by @davdxpx")
+
+    # Startup Logs
+    logger.info("========================================")
+    logger.info(f"🚀 XTV Fileshare Bot v{Config.BOT_VERSION}")
+    logger.info(f"👤 Bot: @{me.username} ({me.id})")
+    logger.info(f"🔑 Owner ID: {Config.CEO_ID}")
+    logger.info("========================================")
+
+    # Mode Check
+    if Config.MAIN_URI == Config.PRIVATE_URI:
+        mode = "STANDALONE / CEO"
+    else:
+        mode = "FRANCHISEE (Connected to MainDB)"
+    logger.info(f"⚙️  Running Mode: {mode}")
+    logger.info("========================================")
 
     # Start Background Tasks
     asyncio.create_task(auto_delete_loop(app))
