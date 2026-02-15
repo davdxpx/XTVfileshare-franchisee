@@ -79,11 +79,15 @@ async def show_franchise_dash(client, callback):
         f"• Local Bundles: `{local_bundles}`\n"
         "• Push Status: 🟢 Active\n\n"
         "__Growth Tips:__\n"
+        "💡 Request push for 5+ bundles to grow network reach.\n"
         "💡 Create unique local bundles to attract users.\n"
         "💡 Use 'Request Push' to share top content globally!"
     )
 
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_main")]])
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📡 Request Push Menu", callback_data="req_push_menu")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
+    ])
     await callback.edit_message_text(text, reply_markup=markup)
 
 @Client.on_callback_query(filters.regex(r"^admin_stats$"))
