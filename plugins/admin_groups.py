@@ -25,9 +25,12 @@ async def admin_grouped_bundles(client, callback):
 
 @Client.on_callback_query(filters.regex(r"^list_groups$"))
 async def list_groups(client, callback):
-    groups = await db.get_all_groups()
+    # Franchisee: List ONLY PrivateDB groups
+    groups = await db.groups_col_private.find({}).to_list(length=1000)
+    logger.info(f"Groups loaded from PrivateDB: {len(groups)}")
+
     if not groups:
-        await callback.answer("No groups found.", show_alert=True)
+        await callback.answer("No local groups found.", show_alert=True)
         # Still show menu if empty
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ Create Group", callback_data="add_group_start")],
@@ -363,7 +366,7 @@ async def create_group_click(client, callback):
         logger.error(f"Group create error: {e}")
         await callback.edit_message_text(f"❌ Error: {e}")
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel"]), group=3)
+@Client.on_message(filters.user(list(Config.ADMIN_IDS)) & filters.text & ~filters.command(["admin", "cancel"]), group=3)
 async def group_input_handler(client, message):
     user_id = message.from_user.id
     if user_id not in group_states:

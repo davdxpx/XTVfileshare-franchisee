@@ -133,7 +133,7 @@ async def admin_channels_menu(client, callback):
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗄️ DB Channels (Storage)", callback_data="admin_channels")],
         [InlineKeyboardButton("🔒 Force-Sub Channels", callback_data="admin_force_subs")],
-        [InlineKeyboardButton("🏢 Franchise Channels", callback_data="admin_franchise_channels")],
+        # [InlineKeyboardButton("🏢 Franchise Channels", callback_data="admin_franchise_channels")], # CEO Only
         [InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])
@@ -471,21 +471,41 @@ async def show_channels(client, callback):
 
 @Client.on_callback_query(filters.regex(r"^admin_force_subs$"))
 async def show_force_subs(client, callback):
-    channels = await db.get_force_sub_channels()
+    # Split Global (MainDB) and Local (PrivateDB)
+    main_fs = await db.channels_col_main.find({"approved": True, "type": "force_sub"}).to_list(length=100)
+    local_fs = await db.channels_col_private.find({"approved": True, "type": "force_sub"}).to_list(length=100)
 
     markup = []
-    if channels:
-        for ch in channels:
+
+    # Global Section
+    if main_fs:
+        markup.append([InlineKeyboardButton("🌍 -- Global (Read-Only) --", callback_data="noop")])
+        for ch in main_fs:
+            # No edit action for global
             markup.append([
-                InlineKeyboardButton(f"{ch.get('title')} ({ch.get('chat_id')})", callback_data=f"view_ch|{ch.get('chat_id')}")
+                InlineKeyboardButton(f"🔒 {ch.get('title')}", callback_data=f"view_global_fs|{ch.get('chat_id')}")
             ])
-    else:
+
+    # Local Section
+    if local_fs:
+        markup.append([InlineKeyboardButton("🏠 -- Local (Manage) --", callback_data="noop")])
+        for ch in local_fs:
+            markup.append([
+                InlineKeyboardButton(f"{ch.get('title')}", callback_data=f"view_ch|{ch.get('chat_id')}")
+            ])
+
+    if not main_fs and not local_fs:
         markup.append([InlineKeyboardButton("No FS channels.", callback_data="noop")])
 
-    markup.append([InlineKeyboardButton("➕ Add Channel (Manual)", callback_data="panel_add_fs_manual")])
+    markup.append([InlineKeyboardButton("➕ Add Local Channel", callback_data="panel_add_fs_manual")])
     markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")])
 
     await callback.edit_message_text("**🔒 Force Sub Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
+
+@Client.on_callback_query(filters.regex(r"^view_global_fs\|"))
+async def view_global_fs(client, callback):
+    chat_id = callback.data.split("|")[1]
+    await callback.answer("Read-only – managed by CEO.", show_alert=True)
 
 # --- Franchise Channels ---
 
