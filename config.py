@@ -40,6 +40,7 @@ class Config:
 
     # Channels
     BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))
+    CEO_CHANNEL_ID = int(os.getenv("CEO_CHANNEL_ID", "0"))
 
     # Default Configs (fallback if DB empty)
     DEFAULT_DELAY = 0  # No delay as per clarification

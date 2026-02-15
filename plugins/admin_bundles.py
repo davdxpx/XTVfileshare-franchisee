@@ -34,7 +34,7 @@ async def create_link_start(client: Client, message: Message):
         "Please **forward** the **first message** of the bundle from the storage channel."
     )
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.forwarded)
+@Client.on_message(filters.user(list(Config.ADMIN_IDS)) & filters.forwarded)
 async def on_forward_received(client: Client, message: Message):
     user_id = message.from_user.id
 
@@ -128,7 +128,7 @@ async def on_media_type_select(client, callback):
 
 from pyrogram import ContinuePropagation
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["cancel", "create_link", "admin", "start"]), group=1)
+@Client.on_message(filters.user(list(Config.ADMIN_IDS)) & filters.text & ~filters.command(["cancel", "create_link", "admin", "start"]), group=1)
 async def on_text_input(client, message):
     user_id = message.from_user.id
     if user_id not in admin_states:
