@@ -183,11 +183,20 @@ async def main():
 
     # Start Background Tasks
     asyncio.create_task(auto_delete_loop(app))
-    asyncio.create_task(backup_loop(app))
+    # asyncio.create_task(backup_loop(app)) # Backup disabled for Franchisee
     asyncio.create_task(sync_loop())
 
     # Warmup Peer Cache
     logger.info("Warming up peer cache...")
+
+    # Cache Backup Channel
+    if Config.BACKUP_CHANNEL_ID:
+        try:
+            await app.get_chat(Config.BACKUP_CHANNEL_ID)
+            logger.info(f"Cached Backup Channel: {Config.BACKUP_CHANNEL_ID}")
+        except Exception as e:
+            logger.error(f"Failed to cache Backup Channel {Config.BACKUP_CHANNEL_ID}: {e}")
+
     try:
         channels = await db.get_approved_channels()
         fs_channels = await db.get_force_sub_channels()

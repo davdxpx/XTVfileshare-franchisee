@@ -2,16 +2,21 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import Config
 from db import db
+from log import get_logger
 from pyrogram import ContinuePropagation
 from datetime import datetime
+
+logger = get_logger(__name__)
 
 # Shared state for admin inputs
 panel_states = {}
 
 # --- Main Admin Panel ---
 
-@Client.on_message(filters.command("admin") & filters.user(Config.ADMIN_ID))
+@Client.on_message(filters.command("admin") & filters.user(list(Config.ADMIN_IDS)))
 async def admin_panel(client: Client, message: Message):
+    user_id = message.from_user.id
+    logger.info(f"user_id check: {user_id} vs {Config.ADMIN_IDS}")
     await show_main_menu(message)
 
 async def show_main_menu(message_or_callback):
@@ -683,7 +688,7 @@ async def panel_bulk_add_task(client, callback):
 
 # --- Input Handlers ---
 
-@Client.on_message(filters.user(Config.ADMIN_ID) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]), group=1)
+@Client.on_message(filters.user(list(Config.ADMIN_IDS)) & filters.text & ~filters.command(["admin", "cancel", "start", "create_link"]), group=1)
 async def handle_panel_input(client, message):
     user_id = message.from_user.id
     if user_id not in panel_states:
@@ -963,7 +968,7 @@ async def handle_panel_input(client, message):
         del panel_states[user_id]
         await show_main_menu(message)
 
-@Client.on_message(filters.command("cancel") & filters.user(Config.ADMIN_ID), group=1)
+@Client.on_message(filters.command("cancel") & filters.user(list(Config.ADMIN_IDS)), group=1)
 async def cancel_panel(client, message):
     user_id = message.from_user.id
     if user_id in panel_states:

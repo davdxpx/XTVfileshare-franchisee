@@ -23,7 +23,14 @@ class Config:
     ADMIN_ID = int(os.getenv("ADMIN_ID", "0")) # Legacy
 
     # Admins List
-    ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+    # Robust parsing: split by comma, strip whitespace, filter digits, convert to int
+    ADMIN_IDS = set()
+    raw_admins = os.getenv("ADMIN_IDS", "")
+    for x in raw_admins.split(","):
+        x = x.strip()
+        if x.isdigit():
+            ADMIN_IDS.add(int(x))
+
     if ADMIN_ID:
         ADMIN_IDS.add(ADMIN_ID)
     if CEO_ID:
