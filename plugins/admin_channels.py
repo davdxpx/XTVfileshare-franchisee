@@ -12,7 +12,9 @@ logger = get_logger(__name__)
 async def on_bot_promoted(client: Client, chat_member: ChatMemberUpdated):
     # Check if the update is about the bot itself
     me = await client.get_me()
-    if chat_member.new_chat_member.user.id != me.id:
+
+    new_member = chat_member.new_chat_member
+    if not new_member or not new_member.user or new_member.user.id != me.id:
         return
 
     # Check if promoted to Admin

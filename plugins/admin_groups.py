@@ -171,7 +171,8 @@ async def add_group_start(client, callback):
         }}
     ]
 
-    results = await db.bundles_col.aggregate(pipeline).to_list(length=100)
+    # Aggregate on PrivateDB
+    results = await db.bundles_col_private.aggregate(pipeline).to_list(length=100)
 
     if not results:
         await callback.edit_message_text(
@@ -337,7 +338,8 @@ async def create_group_click(client, callback):
              # Let's try to be smart:
              query["episodes_label"] = {"$not": {"$regex": r"^\d+$"}}
 
-        cursor = db.bundles_col.find(query)
+        # Query PrivateDB
+        cursor = db.bundles_col_private.find(query)
         bundles = await cursor.to_list(length=100)
         bundle_codes = [b["code"] for b in bundles]
 

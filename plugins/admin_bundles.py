@@ -476,7 +476,8 @@ async def finalize_bundle(client, user_id, message_obj):
         # Update Bundle with Cached Metadata (Async update after insert or re-insert?)
         # Better to update the doc we just inserted or update create_bundle to accept kwargs properly (it does).
         # But we already called create_bundle above. Let's just update it.
-        await db.bundles_col.update_one(
+        # Use PrivateDB collection directly
+        await db.bundles_col_private.update_one(
             {"code": code},
             {"$set": {"tmdb_title": tmdb_title_cache, "tmdb_year": tmdb_year_cache}}
         )
