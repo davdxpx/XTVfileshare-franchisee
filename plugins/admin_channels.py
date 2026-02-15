@@ -42,7 +42,7 @@ async def on_bot_promoted(client: Client, chat_member: ChatMemberUpdated):
 # --- Callback: Accept/Reject Channel ---
 @Client.on_callback_query(filters.regex(r"^chan_(ask_type|reject|set_type)\|"))
 async def handle_channel_decision(client: Client, callback: CallbackQuery):
-    if callback.from_user.id != Config.ADMIN_ID:
+    if callback.from_user.id not in Config.ADMIN_IDS:
         await callback.answer("You are not authorized.", show_alert=True)
         return
 
@@ -102,14 +102,18 @@ async def handle_channel_decision(client: Client, callback: CallbackQuery):
             await callback.edit_message_text(f"❌ **Channel Rejected**\nID: `{chat_id}`\n(Failed to leave: {e})")
 
 # --- Command: List Channels ---
-@Client.on_message(filters.command("list_channels") & filters.user(Config.ADMIN_ID))
+@Client.on_message(filters.command("list_channels") & filters.user(list(Config.ADMIN_IDS)))
 async def list_channels(client: Client, message: Message):
-    channels = await db.get_approved_channels()
+    # Franchisee: List ONLY PrivateDB channels
+    channels = await db.channels_col_private.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]}).to_list(length=100)
+
+    logger.info(f"Storage channels loaded from PrivateDB: {len(channels)}")
+
     if not channels:
-        await message.reply("No approved channels.")
+        await message.reply("No local storage channels found in PrivateDB.")
         return
 
-    text = "**📂 Approved Storage Channels:**\n\n"
+    text = "**📂 Local Storage Channels (PrivateDB):**\n\n"
     for ch in channels:
         text += f"🔹 **{ch.get('title')}** (`{ch.get('chat_id')}`)\n"
 

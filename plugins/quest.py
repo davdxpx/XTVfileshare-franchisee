@@ -38,7 +38,13 @@ class QuestEngine:
         fs_enabled = await db.get_config("force_sub_enabled", False)
         if fs_enabled and current_points < goal_points:
             # Get missing channels
-            all_fs = await db.get_force_sub_channels()
+            # Log checks split
+            main_fs = await db.channels_col_main.find({"approved": True, "type": "force_sub"}).to_list(length=100)
+            local_fs = await db.channels_col_private.find({"approved": True, "type": "force_sub"}).to_list(length=100)
+            all_fs = main_fs + local_fs
+
+            logger.info(f"Force sub check: global {len(main_fs)}, local {len(local_fs)}")
+
             missing = []
 
             # Check membership logic
