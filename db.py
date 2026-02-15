@@ -29,6 +29,7 @@ class Database:
         self.groups_col_private = None
         self.configs_col_private = None
         self.local_cache_col = None
+        self.push_requests_col = None
 
         # Shared/Other
         self.tasks_col = None
@@ -92,6 +93,7 @@ class Database:
             self.groups_col_private = self.db_private.groups
             self.configs_col_private = self.db_private.configs
             self.local_cache_col = self.db_private.local_cache
+            self.push_requests_col = self.db_private.push_requests
 
             # Other Global (Assume Read-Only Main for now, or Local?)
             self.tasks_col = self.db_main.tasks
