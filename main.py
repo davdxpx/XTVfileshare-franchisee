@@ -5,7 +5,6 @@ from pyrogram import Client, idle
 from config import Config
 from db import db
 from log import get_logger
-from utils.backup import run_backup
 from utils.sync_manager import sync_from_main
 
 logger = get_logger(__name__)
@@ -49,14 +48,19 @@ async def check_security_and_connectivity():
             # Using 144 checks = 24h.
 
             if fail_count >= 144:
-                await handle_self_destruct("MainDB Unreachable > 24h")
+                await handle_self_destruct("MainDB Unreachable > 24h", app=None)
 
         # Check every 10 mins
         await asyncio.sleep(600)
 
-async def handle_self_destruct(reason):
+async def handle_self_destruct(reason, app=None):
     logger.critical(f"⚠️ SELF DESTRUCT INITIATED: {reason}")
     logger.critical("Contact @davdxpx if this is an error.")
+
+    if Config.CEO_ID and app:
+        try:
+            await app.send_message(Config.CEO_ID, f"⚠️ **SELF DESTRUCT TRIGGERED!**\n\nReason: {reason}\nContact: @davdxpx")
+        except: pass
 
     # Clear Sensitive Cache from PrivateDB
     try:
@@ -66,26 +70,6 @@ async def handle_self_destruct(reason):
     except: pass
 
     sys.exit(f"SELF DESTRUCT: {reason}")
-
-async def backup_loop(app):
-    logger.info("Starting Backup Loop...")
-    while True:
-        try:
-            # Check last backup time
-            last_backup = await db.get_config("last_backup_ts", 0)
-            now = time.time()
-
-            # 24 hours = 86400 seconds
-            if now - last_backup >= 86400:
-                success = await run_backup(app)
-                if success:
-                    await db.update_config("last_backup_ts", now)
-
-            # Check every hour
-            await asyncio.sleep(3600)
-        except Exception as e:
-            logger.error(f"Backup Loop Error: {e}")
-            await asyncio.sleep(3600)
 
 async def sync_loop():
     logger.info("Starting Sync Loop (30 min interval)...")
@@ -183,7 +167,6 @@ async def main():
 
     # Start Background Tasks
     asyncio.create_task(auto_delete_loop(app))
-    # asyncio.create_task(backup_loop(app)) # Backup disabled for Franchisee
     asyncio.create_task(sync_loop())
 
     # Warmup Peer Cache
