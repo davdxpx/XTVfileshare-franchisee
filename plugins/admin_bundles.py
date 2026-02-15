@@ -211,6 +211,42 @@ async def on_text_input(client, message):
             state["data"]["custom_title"] = text
         await finalize_bundle(client, user_id, message)
 
+    elif step == "wait_push_search":
+        # Handle search input
+        query = message.text.strip().lower()
+
+        # Search both pending and approved?
+        # Let's search approved (MainDB) and pending (PrivateDB)
+        # Search Pending
+        pending_cursor = db.push_requests_col.find({"title": {"$regex": query, "$options": "i"}, "status": "pending"})
+        pending = await pending_cursor.to_list(length=5)
+
+        # Search Approved
+        approved_cursor = db.bundles_col_main.find({"title": {"$regex": query, "$options": "i"}})
+        approved = await approved_cursor.to_list(length=5)
+
+        text = f"🔍 **Search Results for:** `{query}`\n\n"
+
+        if pending:
+            text += "**⏳ Pending Pushes:**\n"
+            for p in pending:
+                text += f"• {p.get('title')} ({p.get('tmdb_id')})\n"
+            text += "\n"
+
+        if approved:
+            text += "**✅ Approved Global:**\n"
+            for b in approved:
+                text += f"• {b.get('title')} (`{b.get('code')}`)\n"
+
+        if not pending and not approved:
+            text += "No matches found."
+
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Status", callback_data="push_status_menu")]])
+        await message.reply(text, reply_markup=markup)
+
+        # Clear state or stay? Stay allows repeated search.
+        # But we should probably provide a back button in message.
+
 @Client.on_callback_query(filters.regex(r"^tmdb_"))
 async def on_tmdb_select(client, callback):
     user_id = callback.from_user.id
@@ -492,6 +528,16 @@ async def cancel_wiz(client, callback):
 @Client.on_callback_query(filters.regex(r"^req_push_menu$"))
 async def req_push_menu(client, callback):
     """Entry point for Request Push Menu"""
+    text = "**📡 Request Push Menu**\n\nManage your bundle pushes to the CEO network."
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 Request Push", callback_data="push_wiz_start")],
+        [InlineKeyboardButton("📊 Push Status", callback_data="push_status_menu")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_franchise_dash")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^push_wiz_start$"))
+async def push_wiz_start(client, callback):
     user_id = callback.from_user.id
     # Initialize state
     admin_states[user_id] = {
@@ -551,7 +597,7 @@ async def show_push_bundle_list(client, callback_query):
     if selected:
         action_row.append(InlineKeyboardButton(f"🚀 Preview ({len(selected)})", callback_data="push_preview"))
 
-    action_row.append(InlineKeyboardButton("❌ Cancel", callback_data="cancel_wizard"))
+    action_row.append(InlineKeyboardButton("🔙 Back", callback_data="req_push_menu"))
     markup.append(action_row)
 
     text = f"**📡 Request Push**\n\nSelect bundles to push to CEO:\nPage {page+1}"
@@ -647,21 +693,11 @@ async def on_push_confirm(client, callback):
 
     selected_codes = state["selected"]
 
-    # Check duplicates in MainDB?
-    # Requirement: "Check MainDB read-only for duplicates before send."
-    # If a bundle with same code exists in MainDB, warn? Or duplicate content?
-    # Usually code is unique random. Unlikely collision.
-    # Maybe check TMDb ID collision? "Did we already push this?"
-    # Let's check code collision in MainDB just in case.
-
+    # Check duplicates in MainDB
     duplicates = []
     final_push_list = []
 
     for code in selected_codes:
-        # Check MainDB directly
-        # We can use db.get_bundle but that checks Private first.
-        # Use db.bundles_col_main directly or implement a specific check method.
-        # Accessing private attr `bundles_col_main` from here is okay? Yes, python.
         exists_main = await db.bundles_col_main.find_one({"code": code})
         if exists_main:
             duplicates.append(code)
@@ -669,13 +705,13 @@ async def on_push_confirm(client, callback):
             final_push_list.append(code)
 
     if duplicates:
-        await callback.answer(f"⚠️ Skipped {len(duplicates)} duplicates already in Global DB.", show_alert=True)
+        await callback.answer(f"⚠️ Skipped {len(duplicates)} duplicates.", show_alert=True)
 
     if not final_push_list:
         await callback.answer("No bundles to push.", show_alert=True)
         return
 
-    # Send Notification
+    # Send Notification & Log to PrivateDB
     try:
         from datetime import datetime
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -687,18 +723,140 @@ async def on_push_confirm(client, callback):
             "**Bundles:**\n"
         )
 
+        req_list = []
         for code in final_push_list:
             b = await db.get_bundle(code)
             title = b.get("title", "Untitled")
             tmdb = b.get("tmdb_id", "N/A")
             msg_text += f"📦 `{code}`: {title} (TMDb: {tmdb})\n"
 
+            req_list.append({
+                "code": code,
+                "title": title,
+                "tmdb_id": tmdb,
+                "status": "pending",
+                "request_date": ts,
+                "user_id": user_id
+            })
+
         await client.send_message(Config.CEO_CHANNEL_ID, msg_text)
+
+        # Log to PrivateDB push_requests collection
+        if req_list:
+            await db.push_requests_col.insert_many(req_list)
+
         await db.add_log("push_request_bulk", user_id, f"Requested push for {len(final_push_list)} bundles.")
 
-        await callback.edit_message_text(f"✅ **Sent!**\n\nRequest for {len(final_push_list)} bundles sent to CEO.")
+        await callback.edit_message_text(
+            f"✅ **Sent!**\n\nRequest for {len(final_push_list)} bundles sent to CEO.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="req_push_menu")]])
+        )
         del admin_states[user_id]
 
     except Exception as e:
         logger.error(f"Push send error: {e}")
         await callback.answer("Failed to send request.", show_alert=True)
+
+# --- Push Status ---
+
+@Client.on_callback_query(filters.regex(r"^push_status_menu$"))
+async def push_status_menu(client, callback):
+    # Overview
+    pending_count = await db.push_requests_col.count_documents({"status": "pending"})
+
+    # Estimate approved from MainDB (count of bundles marked 'shared' or just total?)
+    # Prompt says: "Approved Bundles" from MainDB shared read-only.
+    # Let's count all global bundles.
+    approved_count = await db.bundles_col_main.count_documents({})
+
+    text = (
+        "📊 **Push Status Overview**\n\n"
+        f"⏳ Pending Pushes: `{pending_count}` (PrivateDB)\n"
+        f"✅ Approved Global: `{approved_count}` (MainDB)\n\n"
+        "💡 **Growth Tip:** Push 5+ bundles for approval to boost network traffic!"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏳ View Pending", callback_data="view_pending_push")],
+        [InlineKeyboardButton("✅ View Approved", callback_data="view_approved_push")],
+        [InlineKeyboardButton("🔍 Search Bundles", callback_data="search_push_bundles")],
+        [InlineKeyboardButton("🔙 Back", callback_data="req_push_menu")]
+    ])
+    await callback.edit_message_text(text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^(view_pending_push|view_approved_push)$"))
+async def view_push_lists(client, callback):
+    mode = callback.data
+    user_id = callback.from_user.id
+    page = 0
+
+    # Store state for pagination
+    admin_states[user_id] = {
+        "flow": "push_view",
+        "mode": mode,
+        "page": page
+    }
+    await render_push_list(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^push_list_page_"))
+async def on_push_list_page(client, callback):
+    user_id = callback.from_user.id
+    state = admin_states.get(user_id)
+    if not state or state.get("flow") != "push_view": return
+
+    direction = callback.data.split("_")[3]
+    if direction == "prev": state["page"] = max(0, state["page"] - 1)
+    elif direction == "next": state["page"] += 1
+
+    await render_push_list(client, callback)
+
+async def render_push_list(client, callback):
+    user_id = callback.from_user.id
+    state = admin_states.get(user_id)
+    mode = state["mode"]
+    page = state["page"]
+    limit = 10
+    skip = page * limit
+
+    text = ""
+    items = []
+
+    if mode == "view_pending_push":
+        cursor = db.push_requests_col.find({"status": "pending"}).sort("request_date", -1).skip(skip).limit(limit)
+        items = await cursor.to_list(length=limit)
+        total = await db.push_requests_col.count_documents({"status": "pending"})
+        text = f"**⏳ Pending Pushes (Page {page+1})**\n\n"
+        for i in items:
+            text += f"• **{i.get('title')}**\n  TMDb: `{i.get('tmdb_id')}` | Date: {i.get('request_date')}\n\n"
+
+    elif mode == "view_approved_push":
+        cursor = db.bundles_col_main.find({}).sort("created_at", -1).skip(skip).limit(limit)
+        items = await cursor.to_list(length=limit)
+        total = await db.bundles_col_main.count_documents({})
+        text = f"**✅ Approved Global Bundles (Page {page+1})**\n\n"
+        for i in items:
+            code = i.get("code")
+            files = len(i.get("file_ids", []))
+            quals = ", ".join(i.get("qualities", [])) or "Std"
+            text += f"• **{i.get('title')}**\n  Code: `{code}` | Files: {files} | {quals}\n\n"
+
+    if not items:
+        text += "No items found."
+
+    markup = []
+    nav = []
+    if page > 0: nav.append(InlineKeyboardButton("⬅️ Prev", callback_data="push_list_page_prev"))
+    if (skip + limit) < total: nav.append(InlineKeyboardButton("Next ➡️", callback_data="push_list_page_next"))
+    if nav: markup.append(nav)
+
+    markup.append([InlineKeyboardButton("🔙 Back", callback_data="push_status_menu")])
+
+    await callback.edit_message_text(text, reply_markup=InlineKeyboardMarkup(markup))
+
+@Client.on_callback_query(filters.regex(r"^search_push_bundles$"))
+async def search_push_bundles(client, callback):
+    user_id = callback.from_user.id
+    # Set state handled by on_text_input
+    admin_states[user_id] = {"step": "wait_push_search"}
+    await callback.message.delete()
+    await client.send_message(user_id, "🔍 **Search Bundles**\n\nEnter Title or TMDb ID:")
