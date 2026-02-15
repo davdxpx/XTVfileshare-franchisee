@@ -12,10 +12,11 @@ class Config:
     # MainDB (Read-Only Global Content)
     MAIN_URI = os.getenv("MAIN_URI", os.getenv("MONGO_URI", ""))
     # Append TLS settings to fix SSL handshake issues on some providers
+    # Note: 'ssl_cert_reqs' is not valid in URI for newer pymongo, only 'tlsAllowInvalidCertificates'
     if MAIN_URI and "?" not in MAIN_URI:
-        MAIN_URI += "?tlsAllowInvalidCertificates=true&ssl_cert_reqs=CERT_NONE"
+        MAIN_URI += "?tlsAllowInvalidCertificates=true"
     elif MAIN_URI and "tlsAllowInvalidCertificates" not in MAIN_URI:
-        MAIN_URI += "&tlsAllowInvalidCertificates=true&ssl_cert_reqs=CERT_NONE"
+        MAIN_URI += "&tlsAllowInvalidCertificates=true"
 
     # UserDB (Shared Read-Write Users)
     USER_URI = os.getenv("USER_URI", MAIN_URI)
