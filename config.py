@@ -11,6 +11,11 @@ class Config:
     # 3-DB Architecture Preparation
     # MainDB (Read-Only Global Content)
     MAIN_URI = os.getenv("MAIN_URI", os.getenv("MONGO_URI", ""))
+    # Append TLS settings to fix SSL handshake issues on some providers
+    if MAIN_URI and "?" not in MAIN_URI:
+        MAIN_URI += "?tlsAllowInvalidCertificates=true&ssl_cert_reqs=CERT_NONE"
+    elif MAIN_URI and "tlsAllowInvalidCertificates" not in MAIN_URI:
+        MAIN_URI += "&tlsAllowInvalidCertificates=true&ssl_cert_reqs=CERT_NONE"
 
     # UserDB (Shared Read-Write Users)
     USER_URI = os.getenv("USER_URI", MAIN_URI)

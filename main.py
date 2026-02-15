@@ -9,7 +9,7 @@ from utils.sync_manager import sync_from_main
 
 logger = get_logger(__name__)
 
-async def check_security_and_connectivity():
+async def check_security_and_connectivity(app):
     """
     Robust Security Check:
     1. CEO_ID mismatch vs MainDB Config
@@ -48,7 +48,7 @@ async def check_security_and_connectivity():
             # Using 144 checks = 24h.
 
             if fail_count >= 144:
-                await handle_self_destruct("MainDB Unreachable > 24h", app=None)
+                await handle_self_destruct("MainDB Unreachable > 24h", app=app)
 
         # Check every 10 mins
         await asyncio.sleep(600)
@@ -130,9 +130,16 @@ async def main():
     db.connect()
 
     # Start Security Monitor (Non-blocking task)
-    asyncio.create_task(check_security_and_connectivity())
-
-    # Seed Data
+    # We pass 'app' later? No, app is created below.
+    # We can't pass 'app' to check_security before app is created.
+    # But check_security is a loop. We can assign app to a global or passed object later?
+    # Or start it AFTER app creation?
+    # "Start Security Monitor" is currently before app creation.
+    # Let's move it after app creation so we can pass 'app' if we refactor,
+    # but the function signature is async def check_security_and_connectivity(): (no args).
+    # We need to change the function signature or wrap it.
+    # But main() calls it.
+    # Let's move the call to AFTER app init and pass app.
     await seed_tasks()
 
     # Initialize Bot
@@ -166,6 +173,7 @@ async def main():
     logger.info("========================================")
 
     # Start Background Tasks
+    asyncio.create_task(check_security_and_connectivity(app))
     asyncio.create_task(auto_delete_loop(app))
     asyncio.create_task(sync_loop())
 

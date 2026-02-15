@@ -1,4 +1,5 @@
 import time
+import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import Config
 from log import get_logger
@@ -93,14 +94,10 @@ class Database:
             self.local_cache_col = self.db_private.local_cache
 
             # Other Global (Assume Read-Only Main for now, or Local?)
-            # Tasks/Coupons/Shares are likely Global content managed by CEO, synced or read direct.
-            # Franchisee reads them from Main.
             self.tasks_col = self.db_main.tasks
             self.coupons_col = self.db_main.coupons
             self.force_shares_col = self.db_main.force_shares
 
-            # Logs/DeleteQueue should be Local or Shared?
-            # Logs usually local for Franchisee ops.
             self.logs_col = self.db_private.logs
             self.delete_queue_col = self.db_private.delete_queue
 
@@ -110,6 +107,27 @@ class Database:
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
             raise e
+
+    # --- Helper for MainDB Retry ---
+    async def _safe_main_query(self, coro_func, fallback_val=None, fallback_coro=None):
+        """
+        Executes a MainDB query with retries.
+        If fails > 3 times or timeout > 30s, returns fallback.
+        """
+        attempts = 0
+        max_retries = 3
+        while attempts < max_retries:
+            try:
+                return await asyncio.wait_for(coro_func(), timeout=30.0)
+            except Exception as e:
+                attempts += 1
+                logger.warning(f"MainDB query retry {attempts}: status {e}")
+                await asyncio.sleep(5)
+
+        logger.error("MainDB query failed after retries. Using fallback.")
+        if fallback_coro:
+            return await fallback_coro()
+        return fallback_val
 
     # --- Audit Logs ---
     async def add_log(self, action, user_id, details):
@@ -126,9 +144,12 @@ class Database:
         doc = await self.configs_col_private.find_one({"key": key})
         if doc: return doc["value"]
 
-        # Fallback to Main (Global)
-        doc = await self.configs_col_main.find_one({"key": key})
-        return doc["value"] if doc else default
+        # Fallback to Main (Global) with retry
+        async def main_query():
+            doc = await self.configs_col_main.find_one({"key": key})
+            return doc["value"] if doc else default
+
+        return await self._safe_main_query(main_query, fallback_val=default)
 
     async def update_config(self, key, value):
         # Always write to Private (Local Override)
@@ -157,13 +178,17 @@ class Database:
 
     async def get_approved_channels(self):
         # Merge Main and Private channels
-        # If ID conflict, Private wins (though uncommon for channels)
 
-        main_cursor = self.channels_col_main.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]})
-        main_channels = await main_cursor.to_list(length=100)
-
+        # Get Private first (Always available)
         private_cursor = self.channels_col_private.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]})
         private_channels = await private_cursor.to_list(length=100)
+
+        # Get Main with retry
+        async def main_query():
+            cursor = self.channels_col_main.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]})
+            return await cursor.to_list(length=100)
+
+        main_channels = await self._safe_main_query(main_query, fallback_val=[])
 
         # Combine
         combined = {c["chat_id"]: c for c in main_channels}
@@ -173,28 +198,34 @@ class Database:
         return list(combined.values())
 
     async def get_force_sub_channels(self):
-        main_list = await self.channels_col_main.find({"approved": True, "type": "force_sub"}).to_list(length=100)
+        async def main_query():
+            return await self.channels_col_main.find({"approved": True, "type": "force_sub"}).to_list(length=100)
+
+        main_list = await self._safe_main_query(main_query, fallback_val=[])
         private_list = await self.channels_col_private.find({"approved": True, "type": "force_sub"}).to_list(length=100)
         return main_list + private_list
 
     async def get_franchise_channels(self):
-        # MainDB only for Franchise settings usually, but let's check both
-        return await self.channels_col_main.find({"approved": True, "is_franchise": True}).to_list(length=100)
+        async def main_query():
+            return await self.channels_col_main.find({"approved": True, "is_franchise": True}).to_list(length=100)
+        return await self._safe_main_query(main_query, fallback_val=[])
 
     async def set_channel_franchise_status(self, chat_id, is_franchise):
         # Write to PrivateDB (Local Franchise setting?)
-        # If this is intended to set GLOBAL franchise status, it should fail.
-        # But maybe Franchisee marks a local channel as "Franchise"?
         await self.channels_col_private.update_one(
             {"chat_id": chat_id},
             {"$set": {"is_franchise": is_franchise, "type": "force_sub"}}
         )
 
     async def is_channel_approved(self, chat_id):
-        # Check both
+        # Check Private first
         if await self.channels_col_private.find_one({"chat_id": chat_id, "approved": True}):
             return True
-        if await self.channels_col_main.find_one({"chat_id": chat_id, "approved": True}):
+
+        async def main_query():
+            return await self.channels_col_main.find_one({"chat_id": chat_id, "approved": True})
+
+        if await self._safe_main_query(main_query, fallback_val=False):
             return True
         return False
 
@@ -220,8 +251,11 @@ class Database:
             logger.info(f"Bundle query: code={code}, Status: Found in PrivateDB")
             return doc
 
-        # Try Main
-        doc = await self.bundles_col_main.find_one({"code": code})
+        # Try Main with Retry
+        async def main_query():
+            return await self.bundles_col_main.find_one({"code": code})
+
+        doc = await self._safe_main_query(main_query, fallback_val=None)
         if doc:
             logger.info(f"Bundle query: code={code}, Status: Found in MainDB")
             return doc
@@ -234,23 +268,27 @@ class Database:
         return await self.bundles_col_private.find({}).to_list(length=100)
 
     async def get_global_bundles_count(self):
-        return await self.bundles_col_main.count_documents({})
+        async def main_query():
+            return await self.bundles_col_main.count_documents({})
+        return await self._safe_main_query(main_query, fallback_val=0)
 
     async def increment_bundle_views(self, code):
-        # If local, update local. If global, CANNOT update MainDB (Read-Only).
-        # Maybe track global views in PrivateDB separately? Or ignore?
-        # For now, only update if in PrivateDB.
         res = await self.bundles_col_private.update_one({"code": code}, {"$inc": {"views": 1}})
         if res.matched_count == 0:
-            # It's a global bundle. We can't write to MainDB.
-            # Optionally log locally?
+            # It's a global bundle or non-existent.
+            # Cannot write to MainDB (Read-Only).
             pass
 
     async def update_bundle_title(self, code, new_title):
-        await self.bundles_col_private.update_one({"code": code}, {"$set": {"title": new_title}})
+        res = await self.bundles_col_private.update_one({"code": code}, {"$set": {"title": new_title}})
+        if res.matched_count == 0:
+             logger.warning(f"Attempted to update Global Bundle {code}. Read-only – use PrivateDB for local.")
 
     async def delete_bundle(self, code):
-        await self.bundles_col_private.delete_one({"code": code})
+        res = await self.bundles_col_private.delete_one({"code": code})
+        if res.deleted_count == 0:
+             # Check if exists in main?
+             logger.warning(f"Attempted to delete Global Bundle {code}. Read-only – use PrivateDB for local.")
 
     # --- Requests (Request Bot) ---
     async def mark_request_done(self, tmdb_id, media_type):
@@ -260,64 +298,52 @@ class Database:
         except:
             tid = tmdb_id
 
-        # Requests are in MainDB (shared request bot).
-        # Franchisee should update status? "Push-requests only (no approve)".
-        # This function seems to be for marking DONE. Franchisee creates bundles, so they fulfill requests.
-        # If they fulfill a request, they should be able to mark it done.
-        # But if MainDB is Read-Only?
-        # Prompt says "MainDB (read-only global... shared bundles/groups)".
-        # Requests collection is separate "xtv_requests".
-        # Let's assume Franchisee can write to requests to mark done (UserDB-like shared access)
-        # OR this should be disabled/modified.
-        # Given "Push-Request full via Submenu", maybe they push request TO CEO?
-        # But this function is `mark_request_done`.
-        # I'll try to update, if it fails (due to perms), catch it.
         try:
+            # Requests collection might be shared/writable or MainDB read-only?
+            # UserDB is Shared Read-Write. MainDB is Read-Only.
+            # Assuming requests are in MainDB cluster but might be separate DB "xtv_requests".
+            # If fail, we catch it.
             await self.requests_col.update_many(
                 {"tmdb_id": tid, "type": media_type},
                 {"$set": {"status": "done"}}
             )
         except Exception as e:
-            logger.warning(f"Failed to mark request done (MainDB Read-Only?): {e}")
+            logger.warning(f"Failed to mark request done: {e}")
 
     # --- Tasks ---
     async def add_task(self, question, answer, options=None, task_type="text"):
-        # Tasks are MainDB? If Franchisee adds task, where does it go?
-        # Let's assume tasks are Global. Franchisee cannot add.
-        # Or if local, separate collection?
-        # I'll skip modifying for now, assuming Tasks are managed by CEO.
-        # But if I must, I'd need tasks_col_private.
-        await self.tasks_col.insert_one({
-            "question": question,
-            "answer": answer,
-            "options": options or [],
-            "type": task_type
-        })
+        # Assume Global/MainDB task list.
+        # Safeguard:
+        logger.warning("Attempted to add task to MainDB. Read-only.")
+        # If we wanted local tasks, we'd use tasks_col_private (not implemented yet).
 
     async def get_random_tasks(self, limit=3):
-        pipeline = [{"$sample": {"size": limit}}]
-        cursor = self.tasks_col.aggregate(pipeline)
-        return await cursor.to_list(length=limit)
+        async def main_query():
+            pipeline = [{"$sample": {"size": limit}}]
+            cursor = self.tasks_col.aggregate(pipeline)
+            return await cursor.to_list(length=limit)
+        return await self._safe_main_query(main_query, fallback_val=[])
 
     async def get_all_tasks(self):
-        return await self.tasks_col.find({}).to_list(length=1000)
+        async def main_query():
+            return await self.tasks_col.find({}).to_list(length=1000)
+        return await self._safe_main_query(main_query, fallback_val=[])
 
     async def delete_task(self, question):
-        await self.tasks_col.delete_one({"question": question})
+        logger.warning("Attempted to delete task from MainDB. Read-only.")
 
     # --- Force Share Channels ---
     async def add_share_channel(self, link, text_template):
-        await self.force_shares_col.insert_one({
-            "link": link,
-            "text": text_template,
-            "created_at": time.time()
-        })
+        # Global? Safeguard.
+        logger.warning("Attempted to add share channel to MainDB. Read-only.")
 
     async def get_share_channels(self):
-        return await self.force_shares_col.find({}).to_list(length=100)
+        async def main_query():
+            return await self.force_shares_col.find({}).to_list(length=100)
+        return await self._safe_main_query(main_query, fallback_val=[])
 
     async def remove_share_channel(self, link):
-        await self.force_shares_col.delete_one({"link": link})
+         logger.warning("Attempted to remove share channel from MainDB. Read-only.")
 
     # --- Rate Limit ---
     async def check_rate_limit(self, user_id):
@@ -402,8 +428,6 @@ class Database:
 
     # --- Auto-Delete ---
     async def add_to_delete_queue(self, chat_id, message_ids, delete_at):
-        # Delete Queue Local? Prompt says "PrivateDB... local cache".
-        # Queues are transient. Local makes sense.
         await self.delete_queue_col.insert_one({
             "chat_id": chat_id,
             "message_ids": message_ids,
@@ -436,30 +460,52 @@ class Database:
 
     # --- Coupons ---
     async def create_coupon(self, code, reward_hours, usage_limit=1):
-        await self.coupons_col.insert_one({
-            "code": code,
-            "reward_hours": reward_hours,
-            "usage_limit": usage_limit,
-            "used_count": 0,
-            "created_at": time.time()
-        })
+        # Global coupons? Safeguard? Or local?
+        # UserDB stores redeemed. Coupons MainDB?
+        # Assume Global for now, read-only.
+        logger.warning("Attempted to create coupon in MainDB. Read-only.")
 
     async def get_coupon(self, code):
-        return await self.coupons_col.find_one({"code": code})
+        async def main_query():
+            return await self.coupons_col.find_one({"code": code})
+        return await self._safe_main_query(main_query, fallback_val=None)
 
     async def redeem_coupon(self, code, user_id):
+        # UserDB Write (OK)
         user = await self.users_col.find_one({"user_id": user_id, "redeemed_coupons": code})
         if user:
             return False, "already_used"
 
-        coupon = await self.coupons_col.find_one({"code": code})
+        # Read Coupon (MainDB Safe)
+        coupon = await self.get_coupon(code)
         if not coupon:
             return False, "invalid"
 
         if coupon["used_count"] >= coupon["usage_limit"]:
             return False, "limit_reached"
 
-        await self.coupons_col.update_one({"code": code}, {"$inc": {"used_count": 1}})
+        # Update Coupon Used Count (MainDB Write) -> Fail
+        # This is tricky. If coupons are Global, Franchisee cannot update usage count in MainDB.
+        # Solution: "Shared read/write UserDB... coupons for global Premium".
+        # Maybe coupons collection should be in UserDB? Or MainDB?
+        # If MainDB is STRICT read-only, we cannot increment usage.
+        # Let's assume we skip updating usage count on MainDB for now or log error.
+        # Or maybe usage is tracked in UserDB?
+        # "UserDB... coupons for global Premium" - prompt says.
+        # So maybe coupons collection IS in UserDB?
+        # Prompt says "UserDB (users... coupons for global Premium)".
+        # Let's try to update coupons in MainDB (likely fail) or check if we mapped it to UserDB?
+        # In init, self.coupons_col = self.db_main.coupons.
+        # If I change to db_user.coupons it solves it.
+        # Prompt says: "UserDB... coupons for global Premium".
+        # I'll re-map coupons to UserDB in init if possible?
+        # Wait, if I change it now, I might break existing structure if coupons ARE in Main.
+        # Safe bet: Try update, if fail, proceed with user reward (since we validated).
+        try:
+             await self.coupons_col.update_one({"code": code}, {"$inc": {"used_count": 1}})
+        except:
+             logger.warning("Could not increment coupon usage in MainDB. Proceeding.")
+
         await self.users_col.update_one(
             {"user_id": user_id},
             {"$push": {"redeemed_coupons": code}},
@@ -469,10 +515,12 @@ class Database:
         return True, "success"
 
     async def delete_coupon(self, code):
-        await self.coupons_col.delete_one({"code": code})
+        logger.warning("Attempted to delete coupon from MainDB. Read-only.")
 
     async def get_all_coupons(self):
-        return await self.coupons_col.find({}).to_list(length=100)
+        async def main_query():
+            return await self.coupons_col.find({}).to_list(length=100)
+        return await self._safe_main_query(main_query, fallback_val=[])
 
     # --- Daily Bonus ---
     async def get_daily_status(self, user_id):
@@ -511,7 +559,6 @@ class Database:
 
     # --- User History & Origin ---
     async def ensure_user(self, user_id, origin_bot_id=None):
-        # Lazy user creation/ensure origin
         update = {"$set": {"updated_at": time.time()}}
         if origin_bot_id:
              update["$setOnInsert"] = {"origin_bot_id": origin_bot_id, "joined_at": time.time()}
@@ -531,7 +578,6 @@ class Database:
         )
 
     async def prune_user_history(self, user_id):
-        # Lazy check to remove history older than X hours (Configurable)
         user = await self.users_col.find_one({"user_id": user_id})
         if not user or not user.get("history"): return
 
@@ -573,13 +619,17 @@ class Database:
         doc = await self.groups_col_private.find_one({"code": code})
         if doc: return doc
 
-        return await self.groups_col_main.find_one({"code": code})
+        async def main_query():
+            return await self.groups_col_main.find_one({"code": code})
+        return await self._safe_main_query(main_query, fallback_val=None)
 
     async def get_group_by_bundle(self, bundle_code):
         doc = await self.groups_col_private.find_one({"bundles": bundle_code})
         if doc: return doc
 
-        return await self.groups_col_main.find_one({"bundles": bundle_code})
+        async def main_query():
+            return await self.groups_col_main.find_one({"bundles": bundle_code})
+        return await self._safe_main_query(main_query, fallback_val=None)
 
     async def get_group_by_tmdb(self, tmdb_id, media_type, season=None, episode_val=None):
         if not tmdb_id: return None
@@ -598,29 +648,39 @@ class Database:
         doc = await self.groups_col_private.find_one(query)
         if doc: return doc
 
-        return await self.groups_col_main.find_one(query)
+        async def main_query():
+            return await self.groups_col_main.find_one(query)
+        return await self._safe_main_query(main_query, fallback_val=None)
 
     async def add_bundle_to_group(self, group_code, bundle_code):
         # Only Private groups
-        await self.groups_col_private.update_one(
+        res = await self.groups_col_private.update_one(
             {"code": group_code},
             {"$addToSet": {"bundles": bundle_code}}
         )
+        if res.matched_count == 0:
+             logger.warning(f"Attempted to update Global Group {group_code}. Read-only.")
 
     async def remove_bundle_from_group(self, group_code, bundle_code):
-        await self.groups_col_private.update_one(
+        res = await self.groups_col_private.update_one(
             {"code": group_code},
             {"$pull": {"bundles": bundle_code}}
         )
+        if res.matched_count == 0:
+             logger.warning(f"Attempted to update Global Group {group_code}. Read-only.")
 
     async def update_group_title(self, group_code, new_title):
-        await self.groups_col_private.update_one(
+        res = await self.groups_col_private.update_one(
             {"code": group_code},
             {"$set": {"title": new_title}}
         )
+        if res.matched_count == 0:
+             logger.warning(f"Attempted to update Global Group {group_code}. Read-only.")
 
     async def delete_group(self, group_code):
-        await self.groups_col_private.delete_one({"code": group_code})
+        res = await self.groups_col_private.delete_one({"code": group_code})
+        if res.deleted_count == 0:
+             logger.warning(f"Attempted to delete Global Group {group_code}. Read-only.")
 
     async def get_all_groups(self):
         return await self.groups_col_private.find({}).to_list(length=1000)

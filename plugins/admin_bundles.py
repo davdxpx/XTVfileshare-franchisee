@@ -486,3 +486,219 @@ async def finalize_bundle(client, user_id, message_obj):
 @Client.on_callback_query(filters.regex(r"^cancel_wizard$"))
 async def cancel_wiz(client, callback):
     await cancel_process(client, callback.from_user.id, callback.message)
+
+# --- Full Push Request Flow (FSM) ---
+
+@Client.on_callback_query(filters.regex(r"^req_push_menu$"))
+async def req_push_menu(client, callback):
+    """Entry point for Request Push Menu"""
+    user_id = callback.from_user.id
+    # Initialize state
+    admin_states[user_id] = {
+        "flow": "push_request",
+        "step": "select_bundles",
+        "page": 0,
+        "selected": []
+    }
+    await show_push_bundle_list(client, callback)
+
+async def show_push_bundle_list(client, callback_query):
+    user_id = callback_query.from_user.id
+    state = admin_states.get(user_id)
+    if not state or state.get("flow") != "push_request":
+        await callback_query.answer("Session expired.", show_alert=True)
+        return
+
+    page = state.get("page", 0)
+    selected = state.get("selected", [])
+    limit = 10
+
+    # Fetch local bundles only (PrivateDB)
+    # We might need a helper in db to fetch paginated or just fetch all and slice
+    # Since bundles_col_private isn't huge yet, fetch all is okay for now.
+    all_bundles = await db.get_all_bundles()
+    # Filter or sort? Reverse chronological usually best.
+    all_bundles.reverse()
+
+    total_bundles = len(all_bundles)
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_bundles = all_bundles[start_idx:end_idx]
+
+    markup = []
+
+    # List Bundles as Toggle Buttons
+    for b in page_bundles:
+        code = b["code"]
+        title = b.get("title", "Untitled")[:20]
+        # Checkmark if selected
+        mark = "✅" if code in selected else "⬜"
+        markup.append([
+            InlineKeyboardButton(f"{mark} {title}", callback_data=f"push_toggle|{code}")
+        ])
+
+    # Pagination Control
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="push_page_prev"))
+    if end_idx < total_bundles:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data="push_page_next"))
+    if nav_row:
+        markup.append(nav_row)
+
+    # Action Buttons
+    action_row = []
+    if selected:
+        action_row.append(InlineKeyboardButton(f"🚀 Preview ({len(selected)})", callback_data="push_preview"))
+
+    action_row.append(InlineKeyboardButton("❌ Cancel", callback_data="cancel_wizard"))
+    markup.append(action_row)
+
+    text = f"**📡 Request Push**\n\nSelect bundles to push to CEO:\nPage {page+1}"
+
+    try:
+        await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(markup))
+    except Exception:
+        pass # Message not modified
+
+@Client.on_callback_query(filters.regex(r"^push_toggle\|"))
+async def on_push_toggle(client, callback):
+    user_id = callback.from_user.id
+    state = admin_states.get(user_id)
+    if not state: return
+
+    code = callback.data.split("|")[1]
+    if code in state["selected"]:
+        state["selected"].remove(code)
+    else:
+        state["selected"].append(code)
+
+    await show_push_bundle_list(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^push_page_"))
+async def on_push_page(client, callback):
+    user_id = callback.from_user.id
+    state = admin_states.get(user_id)
+    if not state: return
+
+    direction = callback.data.split("_")[2]
+    if direction == "prev":
+        state["page"] = max(0, state["page"] - 1)
+    elif direction == "next":
+        state["page"] += 1
+
+    await show_push_bundle_list(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^push_preview$"))
+async def on_push_preview(client, callback):
+    user_id = callback.from_user.id
+    state = admin_states.get(user_id)
+    if not state or not state["selected"]:
+        await callback.answer("Nothing selected!", show_alert=True)
+        return
+
+    # Generate Preview
+    selected_codes = state["selected"]
+    preview_text = "**📡 Push Request Preview**\n\n"
+
+    valid_bundles = []
+
+    for code in selected_codes:
+        b = await db.get_bundle(code)
+        if not b: continue
+        valid_bundles.append(b)
+
+        title = b.get("title", "Untitled")
+        tmdb = b.get("tmdb_id", "N/A")
+        files = len(b.get("file_ids", []))
+        quals = ", ".join(b.get("qualities", [])) or "Standard"
+
+        preview_text += (
+            f"🔹 **{title}**\n"
+            f"   Code: `{code}` | TMDb: `{tmdb}`\n"
+            f"   Files: `{files}` | Quality: `{quals}`\n\n"
+        )
+
+    if not valid_bundles:
+        await callback.answer("No valid bundles found.", show_alert=True)
+        return
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"✅ Confirm & Send ({len(valid_bundles)})", callback_data="push_confirm")],
+        [InlineKeyboardButton("🔙 Edit Selection", callback_data="push_back_edit")]
+    ])
+
+    await callback.edit_message_text(preview_text, reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r"^push_back_edit$"))
+async def on_push_back(client, callback):
+    # Just show list again, state is preserved
+    await show_push_bundle_list(client, callback)
+
+@Client.on_callback_query(filters.regex(r"^push_confirm$"))
+async def on_push_confirm(client, callback):
+    user_id = callback.from_user.id
+    state = admin_states.get(user_id)
+    if not state: return
+
+    if not Config.CEO_CHANNEL_ID:
+        await callback.answer("CEO Channel not configured!", show_alert=True)
+        return
+
+    selected_codes = state["selected"]
+
+    # Check duplicates in MainDB?
+    # Requirement: "Check MainDB read-only for duplicates before send."
+    # If a bundle with same code exists in MainDB, warn? Or duplicate content?
+    # Usually code is unique random. Unlikely collision.
+    # Maybe check TMDb ID collision? "Did we already push this?"
+    # Let's check code collision in MainDB just in case.
+
+    duplicates = []
+    final_push_list = []
+
+    for code in selected_codes:
+        # Check MainDB directly
+        # We can use db.get_bundle but that checks Private first.
+        # Use db.bundles_col_main directly or implement a specific check method.
+        # Accessing private attr `bundles_col_main` from here is okay? Yes, python.
+        exists_main = await db.bundles_col_main.find_one({"code": code})
+        if exists_main:
+            duplicates.append(code)
+        else:
+            final_push_list.append(code)
+
+    if duplicates:
+        await callback.answer(f"⚠️ Skipped {len(duplicates)} duplicates already in Global DB.", show_alert=True)
+
+    if not final_push_list:
+        await callback.answer("No bundles to push.", show_alert=True)
+        return
+
+    # Send Notification
+    try:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        msg_text = (
+            f"🚀 **Push Request Incoming!**\n"
+            f"📅 Time: `{ts}`\n"
+            f"👤 Nehmer: `{user_id}`\n\n"
+            "**Bundles:**\n"
+        )
+
+        for code in final_push_list:
+            b = await db.get_bundle(code)
+            title = b.get("title", "Untitled")
+            tmdb = b.get("tmdb_id", "N/A")
+            msg_text += f"📦 `{code}`: {title} (TMDb: {tmdb})\n"
+
+        await client.send_message(Config.CEO_CHANNEL_ID, msg_text)
+        await db.add_log("push_request_bulk", user_id, f"Requested push for {len(final_push_list)} bundles.")
+
+        await callback.edit_message_text(f"✅ **Sent!**\n\nRequest for {len(final_push_list)} bundles sent to CEO.")
+        del admin_states[user_id]
+
+    except Exception as e:
+        logger.error(f"Push send error: {e}")
+        await callback.answer("Failed to send request.", show_alert=True)
