@@ -129,6 +129,9 @@ async def main():
     # Connect to Database
     db.connect()
 
+    # Run Cleanup (Fix pollution from previous syncs)
+    await db.perform_cache_cleanup()
+
     # Start Security Monitor (Non-blocking task)
     # We pass 'app' later? No, app is created below.
     # We can't pass 'app' to check_security before app is created.
