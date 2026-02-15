@@ -30,6 +30,8 @@ class Database:
         self.configs_col_private = None
         self.local_cache_col = None
         self.push_requests_col = None
+        self.cache_channels_col = None
+        self.cache_groups_col = None
 
         # Shared/Other
         self.tasks_col = None
@@ -94,6 +96,8 @@ class Database:
             self.configs_col_private = self.db_private.configs
             self.local_cache_col = self.db_private.local_cache
             self.push_requests_col = self.db_private.push_requests
+            self.cache_channels_col = self.db_private.cache_channels
+            self.cache_groups_col = self.db_private.cache_groups
 
             # Other Global (Assume Read-Only Main for now, or Local?)
             self.tasks_col = self.db_main.tasks
@@ -106,9 +110,42 @@ class Database:
             self.users_col = self.db_user.users
 
             logger.info("Connected to MongoDB (MainDB, UserDB, PrivateDB)")
+
+            # --- Auto-Cleanup of Polluted Local Collections ---
+            # Remove synced items from local collections to fix UI mixing issue
+            # Run in background to not block startup
+            try:
+                # We can't use create_task here easily without loop, but we can just fire and forget if it's async?
+                # Actually, this is init logic. Let's do it if we are in an async context?
+                # db.connect is sync? No, calls AsyncIOMotorClient but doesn't await.
+                # Wait, methods are async. connect() itself is synchronous in __init__?
+                # No, connect() is a method. It is synchronous in main.py?
+                # main.py calls db.connect() synchronously.
+                # AsyncIOMotorClient creation is sync.
+                # So we can't await here.
+                # We will add a cleanup method and call it from main.py
+                pass
+            except Exception:
+                pass
+
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
             raise e
+
+    async def perform_cache_cleanup(self):
+        """Removes 'synced' items from Local PrivateDB collections to fix UI pollution."""
+        try:
+            # Clean Channels
+            res_ch = await self.channels_col_private.delete_many({"is_synced": True})
+            if res_ch.deleted_count > 0:
+                logger.info(f"Cleanup: Removed {res_ch.deleted_count} cached items from Local Channels.")
+
+            # Clean Groups
+            res_gr = await self.groups_col_private.delete_many({"is_synced": True})
+            if res_gr.deleted_count > 0:
+                logger.info(f"Cleanup: Removed {res_gr.deleted_count} cached items from Local Groups.")
+        except Exception as e:
+            logger.warning(f"Cache cleanup failed: {e}")
 
     # --- Helper for MainDB Retry ---
     async def _safe_main_query(self, coro_func, fallback_val=None, fallback_coro=None):
@@ -179,20 +216,26 @@ class Database:
         await self.channels_col_private.delete_one({"chat_id": chat_id})
 
     async def get_approved_channels(self):
-        # Merge Main and Private channels
+        # Merge Main, Cache, and Private channels
 
-        # Get Private first (Always available)
+        # 1. Private (Local)
         private_cursor = self.channels_col_private.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]})
         private_channels = await private_cursor.to_list(length=100)
 
-        # Get Main with retry
+        # 2. Main (Global) with Cache Fallback
         async def main_query():
             cursor = self.channels_col_main.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]})
             return await cursor.to_list(length=100)
 
-        main_channels = await self._safe_main_query(main_query, fallback_val=[])
+        async def cache_fallback():
+            logger.warning("MainDB unreachable. Using Cached Channels.")
+            cursor = self.cache_channels_col.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]})
+            return await cursor.to_list(length=100)
 
-        # Combine
+        main_channels = await self._safe_main_query(main_query, fallback_coro=cache_fallback)
+
+        # Combine: Main overrides nothing (read-only), Private overrides Main if ID matches?
+        # Usually IDs distinct. If conflict, Private wins (local override).
         combined = {c["chat_id"]: c for c in main_channels}
         for c in private_channels:
             combined[c["chat_id"]] = c
@@ -203,7 +246,10 @@ class Database:
         async def main_query():
             return await self.channels_col_main.find({"approved": True, "type": "force_sub"}).to_list(length=100)
 
-        main_list = await self._safe_main_query(main_query, fallback_val=[])
+        async def cache_fallback():
+            return await self.cache_channels_col.find({"approved": True, "type": "force_sub"}).to_list(length=100)
+
+        main_list = await self._safe_main_query(main_query, fallback_coro=cache_fallback)
         private_list = await self.channels_col_private.find({"approved": True, "type": "force_sub"}).to_list(length=100)
         return main_list + private_list
 
@@ -623,7 +669,10 @@ class Database:
 
         async def main_query():
             return await self.groups_col_main.find_one({"code": code})
-        return await self._safe_main_query(main_query, fallback_val=None)
+        async def cache_fallback():
+            return await self.cache_groups_col.find_one({"code": code})
+
+        return await self._safe_main_query(main_query, fallback_coro=cache_fallback)
 
     async def get_group_by_bundle(self, bundle_code):
         doc = await self.groups_col_private.find_one({"bundles": bundle_code})
@@ -631,7 +680,10 @@ class Database:
 
         async def main_query():
             return await self.groups_col_main.find_one({"bundles": bundle_code})
-        return await self._safe_main_query(main_query, fallback_val=None)
+        async def cache_fallback():
+            return await self.cache_groups_col.find_one({"bundles": bundle_code})
+
+        return await self._safe_main_query(main_query, fallback_coro=cache_fallback)
 
     async def get_group_by_tmdb(self, tmdb_id, media_type, season=None, episode_val=None):
         if not tmdb_id: return None
@@ -652,7 +704,10 @@ class Database:
 
         async def main_query():
             return await self.groups_col_main.find_one(query)
-        return await self._safe_main_query(main_query, fallback_val=None)
+        async def cache_fallback():
+            return await self.cache_groups_col.find_one(query)
+
+        return await self._safe_main_query(main_query, fallback_coro=cache_fallback)
 
     async def add_bundle_to_group(self, group_code, bundle_code):
         # Only Private groups

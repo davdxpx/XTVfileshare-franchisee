@@ -20,24 +20,25 @@ async def on_bot_promoted(client: Client, chat_member: ChatMemberUpdated):
         chat = chat_member.chat
         logger.info(f"Bot promoted to admin in {chat.title} ({chat.id})")
 
-        # Notify Admin
-        try:
-            await client.send_message(
-                Config.ADMIN_ID,
-                f"📢 **New Channel Request**\n\n"
-                f"**Title:** {chat.title}\n"
-                f"**ID:** `{chat.id}`\n"
-                f"**Username:** @{chat.username or 'None'}\n\n"
-                "Do you want to accept this channel?",
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("✅ Accept", callback_data=f"chan_ask_type|{chat.id}"),
-                        InlineKeyboardButton("❌ Reject", callback_data=f"chan_reject|{chat.id}")
-                    ]
-                ])
-            )
-        except Exception as e:
-            logger.error(f"Failed to notify admin: {e}")
+        # Notify Admins (All configured admins)
+        for admin_id in Config.ADMIN_IDS:
+            try:
+                await client.send_message(
+                    admin_id,
+                    f"📢 **New Channel Request**\n\n"
+                    f"**Title:** {chat.title}\n"
+                    f"**ID:** `{chat.id}`\n"
+                    f"**Username:** @{chat.username or 'None'}\n\n"
+                    "Do you want to accept this channel?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("✅ Accept", callback_data=f"chan_ask_type|{chat.id}"),
+                            InlineKeyboardButton("❌ Reject", callback_data=f"chan_reject|{chat.id}")
+                        ]
+                    ])
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin_id}: {e}")
 
 # --- Callback: Accept/Reject Channel ---
 @Client.on_callback_query(filters.regex(r"^chan_(ask_type|reject|set_type)\|"))

@@ -452,7 +452,8 @@ async def delete_share_channel(client, callback):
 
 @Client.on_callback_query(filters.regex(r"^admin_channels$"))
 async def show_channels(client, callback):
-    channels = await db.get_approved_channels()
+    # Franchisee: Show ONLY PrivateDB channels
+    channels = await db.channels_col_private.find({"approved": True, "$or": [{"type": "storage"}, {"type": {"$exists": False}}]}).to_list(length=100)
 
     markup = []
     if channels:
@@ -461,11 +462,11 @@ async def show_channels(client, callback):
                 InlineKeyboardButton(f"{ch.get('title')} ({ch.get('chat_id')})", callback_data=f"view_ch|{ch.get('chat_id')}")
             ])
     else:
-        markup.append([InlineKeyboardButton("No channels found.", callback_data="noop")])
+        markup.append([InlineKeyboardButton("No local storage channels.", callback_data="noop")])
 
     markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")])
 
-    await callback.edit_message_text("**📢 Storage Channels**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
+    await callback.edit_message_text("**📢 Local Storage Channels (PrivateDB)**\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
 
 # --- Force Subs ---
 
