@@ -44,7 +44,7 @@ class Database:
             try:
                 self.db_main = self.client_main.get_database()
             except Exception:
-                self.db_main = self.client_main["fileshare_bot_main"]
+                self.db_main = self.client_main["fileshare_bot"]
 
             # 2. UserDB Connection (Global Users)
             if Config.USER_URI == Config.MAIN_URI:
