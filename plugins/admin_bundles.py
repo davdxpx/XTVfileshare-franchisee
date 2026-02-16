@@ -759,6 +759,7 @@ async def on_push_confirm(client, callback):
                 "status": "pending",
                 "timestamp": datetime.utcnow(),
                 "private_bundle_ids": [code], # Single bundle
+                "origin_bundle_codes": [code], # Array of strings for redirect
                 "origin_bot_username": me.username,
                 "origin_bot_id": me.id
             }
