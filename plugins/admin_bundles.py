@@ -689,7 +689,7 @@ async def on_push_confirm(client, callback):
     if not state: return
 
     # Check for write access
-    if not db.push_requests_col_main:
+    if db.push_requests_col_main is None:
         await callback.answer("MainDB write access not configured!", show_alert=True)
         return
 
@@ -829,7 +829,6 @@ async def on_push_confirm(client, callback):
             f"✅ **Sent!**\n\nSuccessfully pushed {inserted_count} requests to MainDB.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="req_push_menu")]])
         )
-        del admin_states[user_id]
         del admin_states[user_id]
 
     except Exception as e:
