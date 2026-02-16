@@ -18,13 +18,6 @@ class Config:
     elif MAIN_URI and "tlsAllowInvalidCertificates" not in MAIN_URI:
         MAIN_URI += "&tlsAllowInvalidCertificates=true"
 
-    # MainDB Write Access (Limited Scope for Pushes)
-    MAIN_PUSH_URI = os.getenv("MAIN_PUSH_URI", MAIN_URI)
-    if MAIN_PUSH_URI and "?" not in MAIN_PUSH_URI:
-        MAIN_PUSH_URI += "?tlsAllowInvalidCertificates=true"
-    elif MAIN_PUSH_URI and "tlsAllowInvalidCertificates" not in MAIN_PUSH_URI:
-        MAIN_PUSH_URI += "&tlsAllowInvalidCertificates=true"
-
     # UserDB (Shared Read-Write Users)
     USER_URI = os.getenv("USER_URI", MAIN_URI)
 
