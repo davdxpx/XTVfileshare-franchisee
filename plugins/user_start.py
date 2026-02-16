@@ -204,11 +204,11 @@ async def process_bundle_start_internal(client, user_id, chat_id, code, force_di
             # Not us -> Redirect
             link = f"https://t.me/{origin_clean}?start={code}"
             text = (
-                f"⚠️ **This bundle is hosted on another bot!**\n\n"
-                f"Please click the button below to access the files."
+                f"This bundle is hosted by another XTV bot.\n\n"
+                f"Click the button below to receive the files."
             )
             markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚀 Get Files Here", url=link)]
+                [InlineKeyboardButton("Get Files here", url=link)]
             ])
             await reply_method(text, reply_markup=markup)
             return
