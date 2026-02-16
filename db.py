@@ -352,12 +352,16 @@ class Database:
         res = await self.bundles_col_private.update_one({"code": code}, {"$set": {"title": new_title}})
         if res.matched_count == 0:
              logger.warning(f"Attempted to update Global Bundle {code}. Read-only – use PrivateDB for local.")
+             return False
+        return True
 
     async def delete_bundle(self, code):
         res = await self.bundles_col_private.delete_one({"code": code})
         if res.deleted_count == 0:
              # Check if exists in main?
              logger.warning(f"Attempted to delete Global Bundle {code}. Read-only – use PrivateDB for local.")
+             return False
+        return True
 
     # --- Requests (Request Bot) ---
     async def mark_request_done(self, tmdb_id, media_type):
@@ -384,6 +388,7 @@ class Database:
         # Assume Global/MainDB task list.
         # Safeguard:
         logger.warning("Attempted to add task to MainDB. Read-only.")
+        return False
         # If we wanted local tasks, we'd use tasks_col_private (not implemented yet).
 
     async def get_random_tasks(self, limit=3):
@@ -400,11 +405,13 @@ class Database:
 
     async def delete_task(self, question):
         logger.warning("Attempted to delete task from MainDB. Read-only.")
+        return False
 
     # --- Force Share Channels ---
     async def add_share_channel(self, link, text_template):
         # Global? Safeguard.
         logger.warning("Attempted to add share channel to MainDB. Read-only.")
+        return False
 
     async def get_share_channels(self):
         async def main_query():
@@ -413,6 +420,7 @@ class Database:
 
     async def remove_share_channel(self, link):
          logger.warning("Attempted to remove share channel from MainDB. Read-only.")
+         return False
 
     # --- Rate Limit ---
     async def check_rate_limit(self, user_id):
@@ -533,6 +541,7 @@ class Database:
         # UserDB stores redeemed. Coupons MainDB?
         # Assume Global for now, read-only.
         logger.warning("Attempted to create coupon in MainDB. Read-only.")
+        return False
 
     async def get_coupon(self, code):
         async def main_query():
@@ -558,22 +567,11 @@ class Database:
         # Solution: "Shared read/write UserDB... coupons for global Premium".
         # Maybe coupons collection should be in UserDB? Or MainDB?
         # If MainDB is STRICT read-only, we cannot increment usage.
-        # Let's assume we skip updating usage count on MainDB for now or log error.
-        # Or maybe usage is tracked in UserDB?
-        # "UserDB... coupons for global Premium" - prompt says.
-        # So maybe coupons collection IS in UserDB?
-        # Prompt says "UserDB (users... coupons for global Premium)".
-        # Let's try to update coupons in MainDB (likely fail) or check if we mapped it to UserDB?
-        # In init, self.coupons_col = self.db_main.coupons.
-        # If I change to db_user.coupons it solves it.
-        # Prompt says: "UserDB... coupons for global Premium".
-        # I'll re-map coupons to UserDB in init if possible?
-        # Wait, if I change it now, I might break existing structure if coupons ARE in Main.
-        # Safe bet: Try update, if fail, proceed with user reward (since we validated).
+        # We try to update, but catch any error and proceed (since user validation passed).
         try:
              await self.coupons_col.update_one({"code": code}, {"$inc": {"used_count": 1}})
-        except:
-             logger.warning("Could not increment coupon usage in MainDB. Proceeding.")
+        except Exception as e:
+             logger.warning(f"Could not increment coupon usage in MainDB (Read-Only): {e}. Proceeding with reward.")
 
         await self.users_col.update_one(
             {"user_id": user_id},
@@ -585,6 +583,7 @@ class Database:
 
     async def delete_coupon(self, code):
         logger.warning("Attempted to delete coupon from MainDB. Read-only.")
+        return False
 
     async def get_all_coupons(self):
         async def main_query():
@@ -738,6 +737,8 @@ class Database:
         )
         if res.matched_count == 0:
              logger.warning(f"Attempted to update Global Group {group_code}. Read-only.")
+             return False
+        return True
 
     async def remove_bundle_from_group(self, group_code, bundle_code):
         res = await self.groups_col_private.update_one(
@@ -746,6 +747,8 @@ class Database:
         )
         if res.matched_count == 0:
              logger.warning(f"Attempted to update Global Group {group_code}. Read-only.")
+             return False
+        return True
 
     async def update_group_title(self, group_code, new_title):
         res = await self.groups_col_private.update_one(
@@ -754,11 +757,15 @@ class Database:
         )
         if res.matched_count == 0:
              logger.warning(f"Attempted to update Global Group {group_code}. Read-only.")
+             return False
+        return True
 
     async def delete_group(self, group_code):
         res = await self.groups_col_private.delete_one({"code": group_code})
         if res.deleted_count == 0:
              logger.warning(f"Attempted to delete Global Group {group_code}. Read-only.")
+             return False
+        return True
 
     async def get_all_groups(self):
         return await self.groups_col_private.find({}).to_list(length=1000)

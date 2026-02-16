@@ -444,8 +444,11 @@ async def view_share_channel(client, callback):
 @Client.on_callback_query(filters.regex(r"^del_share\|"))
 async def delete_share_channel(client, callback):
     link = callback.data.split("|")[1]
-    await db.remove_share_channel(link)
-    await callback.answer("Removed!", show_alert=True)
+    success = await db.remove_share_channel(link)
+    if success:
+        await callback.answer("Removed!", show_alert=True)
+    else:
+        await callback.answer("❌ Read-only: Cannot remove Global Share Channel.", show_alert=True)
     await show_share_channels(client, callback)
 
 # --- Channels (Storage) ---
@@ -508,37 +511,7 @@ async def view_global_fs(client, callback):
     chat_id = callback.data.split("|")[1]
     await callback.answer("Read-only – managed by CEO.", show_alert=True)
 
-# --- Franchise Channels ---
-
-@Client.on_callback_query(filters.regex(r"^admin_franchise_channels$"))
-async def show_franchise_channels(client, callback):
-    channels = await db.get_franchise_channels()
-
-    markup = []
-    if channels:
-        for ch in channels:
-            markup.append([
-                InlineKeyboardButton(f"{ch.get('title')} ({ch.get('chat_id')})", callback_data=f"view_ch|{ch.get('chat_id')}")
-            ])
-    else:
-        markup.append([InlineKeyboardButton("No Franchise channels.", callback_data="noop")])
-
-    markup.append([InlineKeyboardButton("➕ Add Franchise Channel", callback_data="panel_add_franchise_manual")])
-    markup.append([InlineKeyboardButton("🔙 Back", callback_data="admin_channels_menu")])
-
-    await callback.edit_message_text("**🏢 Franchise Channels**\nGlobal mandatory channels:\nClick to manage:", reply_markup=InlineKeyboardMarkup(markup))
-
-@Client.on_callback_query(filters.regex(r"^panel_add_franchise_manual$"))
-async def panel_add_franchise_manual(client, callback):
-    panel_states[callback.from_user.id] = "wait_franchise_input"
-    await callback.message.delete()
-    await client.send_message(
-        callback.from_user.id,
-        "**➕ Add Franchise Channel**\n\n"
-        "Please add the bot as Admin to the channel first!\n\n"
-        "Then send the **Channel ID** or **Username**.\n"
-        "Or forward a message from it."
-    )
+# --- Franchise Channels (Removed for Franchisee) ---
 
 @Client.on_callback_query(filters.regex(r"^view_ch\|"))
 async def view_channel(client, callback):
@@ -632,8 +605,11 @@ async def request_push_bundle(client, callback):
 @Client.on_callback_query(filters.regex(r"^del_bund_confirm\|"))
 async def del_bund_confirm(client, callback):
     code = callback.data.split("|")[1]
-    await db.delete_bundle(code)
-    await callback.answer("Bundle deleted!", show_alert=True)
+    success = await db.delete_bundle(code)
+    if success:
+        await callback.answer("Bundle deleted!", show_alert=True)
+    else:
+        await callback.answer("❌ Failed: Global Bundle is Read-Only!", show_alert=True)
     await manage_bundles_menu(client, callback)
 
 @Client.on_callback_query(filters.regex(r"^rename_bund\|"))
@@ -769,9 +745,12 @@ async def handle_panel_input(client, message):
             code = raw_state["code"]
             reward = raw_state["reward"]
 
-            await db.create_coupon(code, reward, limit)
-            await db.add_log("create_coupon", user_id, f"Created {code}")
-            await message.reply(f"✅ Coupon Created!\n`{code}` -> {reward}h (Max {limit})")
+            success = await db.create_coupon(code, reward, limit)
+            if success:
+                await db.add_log("create_coupon", user_id, f"Created {code}")
+                await message.reply(f"✅ Coupon Created!\n`{code}` -> {reward}h (Max {limit})")
+            else:
+                await message.reply("❌ Read-only: Cannot create Global Coupon.")
             del panel_states[user_id]
             await show_main_menu(message)
         except:
@@ -780,9 +759,12 @@ async def handle_panel_input(client, message):
 
     if state_key == "wait_coupon_del":
         code = message.text.strip().upper()
-        await db.delete_coupon(code)
-        await db.add_log("delete_coupon", user_id, f"Deleted {code}")
-        await message.reply(f"✅ Coupon `{code}` deleted (if it existed).")
+        success = await db.delete_coupon(code)
+        if success:
+            await db.add_log("delete_coupon", user_id, f"Deleted {code}")
+            await message.reply(f"✅ Coupon `{code}` deleted (if it existed).")
+        else:
+            await message.reply("❌ Read-only: Cannot delete Global Coupon.")
         del panel_states[user_id]
         await show_main_menu(message)
         return
@@ -859,9 +841,12 @@ async def handle_panel_input(client, message):
     if state_key == "wait_bundle_rename":
         code = raw_state["code"]
         new_title = message.text
-        await db.update_bundle_title(code, new_title)
-        await db.add_log("rename_bundle", user_id, f"Renamed {code} to {new_title}")
-        await message.reply(f"✅ Bundle renamed to: `{new_title}`")
+        success = await db.update_bundle_title(code, new_title)
+        if success:
+            await db.add_log("rename_bundle", user_id, f"Renamed {code} to {new_title}")
+            await message.reply(f"✅ Bundle renamed to: `{new_title}`")
+        else:
+            await message.reply("❌ Failed: Global Bundle is Read-Only!")
         del panel_states[user_id]
         await show_main_menu(message)
         return
@@ -882,8 +867,11 @@ async def handle_panel_input(client, message):
     if state_key == "wait_share_text_final":
         text = message.text
         link = raw_state["link"]
-        await db.add_share_channel(link, text)
-        await message.reply(f"✅ **Share Channel Added!**\n\nLink: `{link}`\nText: `{text}`")
+        success = await db.add_share_channel(link, text)
+        if success:
+            await message.reply(f"✅ **Share Channel Added!**\n\nLink: `{link}`\nText: `{text}`")
+        else:
+            await message.reply("❌ Read-only: Cannot add Global Share Channel.")
         del panel_states[user_id]
         await show_main_menu(message)
         return
@@ -922,43 +910,6 @@ async def handle_panel_input(client, message):
         except Exception as e:
             await message.reply(f"❌ Error adding channel: {e}")
 
-    elif state_key == "wait_franchise_input":
-        text = message.text
-        chat_id = None
-        if text.lstrip("-").isdigit():
-            chat_id = int(text)
-        elif text.startswith("@"):
-            try:
-                chat = await client.get_chat(text)
-                chat_id = chat.id
-            except Exception:
-                await message.reply("❌ Could not resolve username.")
-                return
-        elif message.forward_from_chat:
-             chat_id = message.forward_from_chat.id
-        else:
-             await message.reply("❌ Invalid input.")
-             return
-
-        try:
-            chat = await client.get_chat(chat_id)
-            invite = None
-            try:
-                invite_obj = await client.create_chat_invite_link(chat_id, name="Fileshare Bot Franchise")
-                invite = invite_obj.invite_link
-            except:
-                invite = chat.invite_link
-
-            # Add with force_sub type AND is_franchise=True
-            await db.add_channel(chat_id, chat.title, chat.username, "force_sub", invite)
-            await db.set_channel_franchise_status(chat_id, True)
-
-            await message.reply(f"✅ Added **{chat.title}** as Franchise Channel.")
-            del panel_states[user_id]
-            await show_main_menu(message)
-        except Exception as e:
-            await message.reply(f"❌ Error adding channel: {e}")
-
     elif state_key == "wait_task_input":
         text = message.text
         parts = [p.strip() for p in text.split("|")]
@@ -973,8 +924,11 @@ async def handle_panel_input(client, message):
             raw_opts = parts[2]
             options = [o.strip() for o in raw_opts.split(",")]
             task_type = "quiz" if options else "text"
-        await db.add_task(question, answer, options, task_type)
-        await message.reply(f"✅ Task Added!\n\nQ: {question}\nA: {answer}")
+        success = await db.add_task(question, answer, options, task_type)
+        if success:
+            await message.reply(f"✅ Task Added!\n\nQ: {question}\nA: {answer}")
+        else:
+            await message.reply("❌ Read-only: Cannot add Global Task.")
         del panel_states[user_id]
         await show_main_menu(message)
 
@@ -983,6 +937,7 @@ async def handle_panel_input(client, message):
         lines = text.split("\n")
         added = 0
         failed = 0
+        skipped_ro = 0
         for line in lines:
             line = line.strip()
             if not line: continue
@@ -998,9 +953,17 @@ async def handle_panel_input(client, message):
                 raw_opts = parts[2]
                 options = [o.strip() for o in raw_opts.split(",")]
                 task_type = "quiz" if options else "text"
-            await db.add_task(question, answer, options, task_type)
-            added += 1
-        await message.reply(f"✅ Processed!\nAdded: {added}\nFailed: {failed}")
+            success = await db.add_task(question, answer, options, task_type)
+            if success:
+                added += 1
+            else:
+                skipped_ro += 1
+
+        msg = f"✅ Processed!\nAdded: {added}\nFailed Format: {failed}"
+        if skipped_ro > 0:
+            msg += f"\nSkipped (Read-only): {skipped_ro}"
+
+        await message.reply(msg)
         del panel_states[user_id]
         await show_main_menu(message)
 
