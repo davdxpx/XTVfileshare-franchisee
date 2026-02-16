@@ -78,7 +78,7 @@ class Database:
                     self.db_private = self.client_private["fileshare_bot_private"]
 
             # 4. RequestDB (Inside MainDB Cluster)
-            self.db_request = self.client_main["xtv_requests"]
+            self.db_request = self.client_main["mainDB-requests"]
             self.requests_col = self.db_request["requests"]
 
             # Initialize Collections
