@@ -541,8 +541,8 @@ async def req_push_menu(client, callback):
     """Entry point for Request Push Menu"""
     text = "**📡 Request Push Menu**\n\nManage your bundle pushes to the CEO network."
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 Request Push", callback_data="push_wiz_start")],
-        [InlineKeyboardButton("📊 Push Status", callback_data="push_status_menu")],
+        [InlineKeyboardButton("Request Push", callback_data="push_wiz_start")],
+        [InlineKeyboardButton("Push Status", callback_data="push_status_menu")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_franchise_dash")]
     ])
     await callback.edit_message_text(text, reply_markup=markup)
@@ -606,12 +606,12 @@ async def show_push_bundle_list(client, callback_query):
     # Action Buttons
     action_row = []
     if selected:
-        action_row.append(InlineKeyboardButton(f"🚀 Preview ({len(selected)})", callback_data="push_preview"))
+        action_row.append(InlineKeyboardButton(f"Preview ({len(selected)})", callback_data="push_preview"))
 
-    action_row.append(InlineKeyboardButton("🔙 Back", callback_data="req_push_menu"))
+    action_row.append(InlineKeyboardButton("Back", callback_data="req_push_menu"))
     markup.append(action_row)
 
-    text = f"**📡 Request Push**\n\nSelect bundles to push to CEO:\nPage {page+1}"
+    text = f"**Request Push**\n\nSelect bundles to push to CEO:\nPage {page+1}"
 
     try:
         await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(markup))
@@ -681,8 +681,8 @@ async def on_push_preview(client, callback):
         return
 
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"✅ Confirm & Send ({len(valid_bundles)})", callback_data="push_confirm")],
-        [InlineKeyboardButton("🔙 Edit Selection", callback_data="push_back_edit")]
+        [InlineKeyboardButton(f"Confirm & Send ({len(valid_bundles)})", callback_data="push_confirm")],
+        [InlineKeyboardButton("Edit Selection", callback_data="push_back_edit")]
     ])
 
     await callback.edit_message_text(preview_text, reply_markup=markup)
@@ -787,16 +787,16 @@ async def on_push_confirm(client, callback):
 
         await db.add_log("push_request", user_id, f"Push requested: {inserted_count} sent, {skipped_count} skipped.")
 
-        result_text = f"✅ **Push Request Complete**\n\nSENT: `{inserted_count}`\nSKIPPED (Duplicate): `{skipped_count}`"
+        result_text = f"**Push Request Complete**\n\nSENT: `{inserted_count}`\nSKIPPED (Duplicate): `{skipped_count}`"
         if errors:
             result_text += f"\nERRORS: {', '.join(errors)}"
 
         if skipped_count > 0 and inserted_count == 0:
-             result_text += "\n\n⚠️ Content already pushed or pending approval."
+             result_text += "\n\nContent already pushed or pending approval."
 
         await callback.edit_message_text(
             result_text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="req_push_menu")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Menu", callback_data="req_push_menu")]])
         )
         del admin_states[user_id]
 
@@ -817,17 +817,18 @@ async def push_status_menu(client, callback):
     approved_count = await db.bundles_col_main.count_documents({})
 
     text = (
-        "📊 **Push Status Overview**\n\n"
-        f"⏳ Pending Pushes: `{pending_count}` (PrivateDB)\n"
-        f"✅ Approved Global: `{approved_count}` (MainDB)\n\n"
-        "💡 **Growth Tip:** Push 5+ bundles for approval to boost network traffic!"
+        "**Push Status Overview**\n\n"
+        f"Pending Pushes: `{pending_count}`\n"
+        f"Approved Global: `{approved_count}`\n\n"
+        "**Growth Tips:**\n"
+        "Push 5+ bundles for faster approval!"
     )
 
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏳ View Pending", callback_data="view_pending_push")],
-        [InlineKeyboardButton("✅ View Approved", callback_data="view_approved_push")],
-        [InlineKeyboardButton("🔍 Search Bundles", callback_data="search_push_bundles")],
-        [InlineKeyboardButton("🔙 Back", callback_data="req_push_menu")]
+        [InlineKeyboardButton("View Pending", callback_data="view_pending_push")],
+        [InlineKeyboardButton("View Approved", callback_data="view_approved_push")],
+        [InlineKeyboardButton("Search Bundles", callback_data="search_push_bundles")],
+        [InlineKeyboardButton("Back", callback_data="req_push_menu")]
     ])
     await callback.edit_message_text(text, reply_markup=markup)
 
@@ -880,23 +881,23 @@ async def render_push_list(client, callback):
         cursor = db.bundles_col_main.find({}).sort("created_at", -1).skip(skip).limit(limit)
         items = await cursor.to_list(length=limit)
         total = await db.bundles_col_main.count_documents({})
-        text = f"**✅ Approved Global Bundles (Page {page+1})**\n\n"
+        text = f"**Approved Global Bundles (Page {page+1})**\n\n"
         for i in items:
             code = i.get("code")
             files = len(i.get("file_ids", []))
             quals = ", ".join(i.get("qualities", [])) or "Std"
-            text += f"• **{i.get('title')}**\n  Code: `{code}` | Files: {files} | {quals}\n\n"
+            text += f"• **{i.get('title')}**\n  Access global via code: `{code}`\n\n"
 
     if not items:
         text += "No items found."
 
     markup = []
     nav = []
-    if page > 0: nav.append(InlineKeyboardButton("⬅️ Prev", callback_data="push_list_page_prev"))
-    if (skip + limit) < total: nav.append(InlineKeyboardButton("Next ➡️", callback_data="push_list_page_next"))
+    if page > 0: nav.append(InlineKeyboardButton("Prev", callback_data="push_list_page_prev"))
+    if (skip + limit) < total: nav.append(InlineKeyboardButton("Next", callback_data="push_list_page_next"))
     if nav: markup.append(nav)
 
-    markup.append([InlineKeyboardButton("🔙 Back", callback_data="push_status_menu")])
+    markup.append([InlineKeyboardButton("Back", callback_data="push_status_menu")])
 
     await callback.edit_message_text(text, reply_markup=InlineKeyboardMarkup(markup))
 
