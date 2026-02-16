@@ -688,8 +688,9 @@ async def on_push_confirm(client, callback):
     state = admin_states.get(user_id)
     if not state: return
 
-    if not Config.CEO_CHANNEL_ID:
-        await callback.answer("CEO Channel not configured!", show_alert=True)
+    # Check for write access
+    if not db.push_requests_col_main:
+        await callback.answer("MainDB write access not configured!", show_alert=True)
         return
 
     selected_codes = state["selected"]
@@ -717,41 +718,118 @@ async def on_push_confirm(client, callback):
         from datetime import datetime
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        msg_text = (
-            f"🚀 **Push Request Incoming!**\n"
-            f"📅 Time: `{ts}`\n"
-            f"👤 Nehmer: `{user_id}`\n\n"
-            "**Bundles:**\n"
-        )
+        req_list_local = []
 
-        req_list = []
         for code in final_push_list:
             b = await db.get_bundle(code)
             title = b.get("title", "Untitled")
             tmdb = b.get("tmdb_id", "N/A")
-            msg_text += f"📦 `{code}`: {title} (TMDb: {tmdb})\n"
 
-            req_list.append({
-                "code": code,
+            # Prepare Push Document for MainDB
+            # Schema: title, tmdb_id, file_ids_summary (count + total_size), qualities array, season, episode_count_total, nehmer_id (from ADMIN_ID), status="pending", timestamp, private_bundle_ids (array of local bundle codes)
+
+            # Since we are pushing individual bundles in this loop, we treat each as a request?
+            # Or group them? The loop iterates code by code.
+            # Let's push individually for cleaner tracking in MainDB unless bulk is required.
+            # Prompt says: "Push-Request full via Submenu... Select 1+ bundles... confirm/send".
+            # If we send a bulk request, the MainDB structure might expect a bulk doc or multiple docs.
+            # Prompt implies a single request can have multiple private_bundle_ids? "private_bundle_ids (array of local bundle codes)".
+            # So we should group them if possible. But the prompt also mentions "title, tmdb_id".
+            # If we select mixed bundles (different titles), grouping into one doc is weird.
+            # Assuming typical flow is selecting bundles of ONE series/movie or related.
+            # If mixed, we might need multiple docs.
+            # Let's group by TMDb ID + Title?
+            pass # just comment
+
+        # Group by TMDb/Title
+        grouped_push = {}
+        for code in final_push_list:
+            b = await db.get_bundle(code)
+            key = (b.get("tmdb_id"), b.get("title"))
+            if key not in grouped_push:
+                grouped_push[key] = []
+            grouped_push[key].append(b)
+
+        # Insert into MainDB
+        inserted_count = 0
+        for (tmdb, title), bundles in grouped_push.items():
+            # Aggregate Metadata
+            total_files = sum(len(b.get("file_ids", [])) for b in bundles)
+            total_size = sum(sum(f.get("file_size", 0) for f in b.get("file_ids", [])) for b in bundles)
+
+            # Collect all qualities
+            all_quals = set()
+            for b in bundles:
+                for q in b.get("qualities", []):
+                    all_quals.add(q)
+
+            # Season/Ep logic (Take from first or aggregated?)
+            season = bundles[0].get("season")
+            ep_count = bundles[0].get("episode_count_total") # Approximation
+
+            bundle_codes = [b["code"] for b in bundles]
+
+            doc = {
                 "title": title,
                 "tmdb_id": tmdb,
+                "file_ids_summary": {
+                    "count": total_files,
+                    "total_size": total_size
+                },
+                "qualities": list(all_quals),
+                "season": season,
+                "episode_count_total": ep_count,
+                "nehmer_id": user_id,
                 "status": "pending",
-                "request_date": ts,
-                "user_id": user_id
+                "timestamp": time.time(),
+                "private_bundle_ids": bundle_codes
+            }
+
+            # Duplicate Check MainDB (by tmdb_id + title)
+            # "Perform duplicate check first (query MainDB by tmdb_id + title)."
+            # Assuming "duplicate" means "pending request already exists"?
+            # Or "content already exists"?
+            # Let's check if a PENDING request exists.
+            existing_req = await db.push_requests_col_main.find_one({
+                "tmdb_id": tmdb,
+                "title": title,
+                "status": "pending"
             })
 
-        await client.send_message(Config.CEO_CHANNEL_ID, msg_text)
+            if existing_req:
+                # Update it? Or Skip?
+                # "Duplicate check ... skip".
+                logger.info(f"Skipping duplicate push request for {title}")
+                continue
 
-        # Log to PrivateDB push_requests collection
-        if req_list:
-            await db.push_requests_col.insert_many(req_list)
+            res = await db.push_requests_col_main.insert_one(doc)
+            inserted_id = res.inserted_id
+            logger.info(f"Push inserted to MainDB push_requests: {inserted_id}")
+            inserted_count += 1
 
-        await db.add_log("push_request_bulk", user_id, f"Requested push for {len(final_push_list)} bundles.")
+            # Log Local
+            for code in bundle_codes:
+                req_list_local.append({
+                    "code": code,
+                    "title": title,
+                    "tmdb_id": tmdb,
+                    "status": "pending",
+                    "request_date": ts,
+                    "user_id": user_id,
+                    "main_request_id": inserted_id
+                })
+
+        # Log to PrivateDB push_requests collection (Local History)
+        if req_list_local:
+            await db.push_requests_col.insert_many(req_list_local)
+
+        await db.add_log("push_request_bulk", user_id, f"Requested push for {len(final_push_list)} bundles (Created {inserted_count} requests).")
 
         await callback.edit_message_text(
-            f"✅ **Sent!**\n\nRequest for {len(final_push_list)} bundles sent to CEO.",
+            f"✅ **Sent!**\n\nSuccessfully pushed {inserted_count} requests to MainDB.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="req_push_menu")]])
         )
+        del admin_states[user_id]
         del admin_states[user_id]
 
     except Exception as e:

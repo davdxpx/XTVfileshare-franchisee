@@ -626,37 +626,8 @@ async def manage_single_bundle(client, callback):
 
 @Client.on_callback_query(filters.regex(r"^req_push\|"))
 async def request_push_bundle(client, callback):
-    code = callback.data.split("|")[1]
-    bundle = await db.get_bundle(code)
-    if not bundle:
-        await callback.answer("Bundle not found.", show_alert=True)
-        return
-
-    if not Config.CEO_CHANNEL_ID:
-        await callback.answer("CEO Channel not configured.", show_alert=True)
-        return
-
-    try:
-        title = bundle.get("title", "Untitled")
-        tmdb_id = bundle.get("tmdb_id", "N/A")
-        file_count = len(bundle.get("file_ids", []))
-        user = callback.from_user
-
-        text = (
-            "🚀 **New Push Request**\n\n"
-            f"📦 **Bundle:** {title}\n"
-            f"🔑 **Code:** `{code}`\n"
-            f"🎬 **TMDb:** `{tmdb_id}`\n"
-            f"📂 **Files:** `{file_count}`\n\n"
-            f"👤 **From:** {user.first_name} (`{user.id}`)"
-        )
-
-        await client.send_message(Config.CEO_CHANNEL_ID, text)
-        await db.add_log("push_request", user.id, f"Requested push for {code}")
-        await callback.answer("✅ Push Request Sent!", show_alert=True)
-    except Exception as e:
-        logger.error(f"Push Request Error: {e}")
-        await callback.answer("❌ Failed to send request.", show_alert=True)
+    # Deprecated in favor of Bulk Menu
+    await callback.answer("Please use the 'Request Push Menu' in Dashboard.", show_alert=True)
 
 @Client.on_callback_query(filters.regex(r"^del_bund_confirm\|"))
 async def del_bund_confirm(client, callback):

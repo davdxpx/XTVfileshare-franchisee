@@ -46,6 +46,11 @@ class Database:
         # RequestDB Collection
         self.requests_col = None
 
+        # MainDB Push Write (Limited Role)
+        self.client_push = None
+        self.db_main_push = None
+        self.push_requests_col_main = None
+
     def connect(self):
         try:
             # 1. MainDB Connection (Global Content)
@@ -54,6 +59,19 @@ class Database:
                 self.db_main = self.client_main.get_database()
             except Exception:
                 self.db_main = self.client_main["fileshare_bot_main"]
+
+            # 1b. MainDB Push Connection (Limited Write)
+            if Config.MAIN_PUSH_URI:
+                self.client_push = AsyncIOMotorClient(Config.MAIN_PUSH_URI)
+                try:
+                    self.db_main_push = self.client_push.get_database()
+                except Exception:
+                    # Fallback or assume same DB name if URI is different
+                    self.db_main_push = self.client_push["fileshare_bot_main"]
+            else:
+                # Fallback to main client if no specific push URI (assuming MainURI has write or fail)
+                self.client_push = self.client_main
+                self.db_main_push = self.db_main
 
             # 2. UserDB Connection (Global Users)
             if Config.USER_URI == Config.MAIN_URI:
@@ -88,6 +106,9 @@ class Database:
             self.bundles_col_main = self.db_main.bundles
             self.groups_col_main = self.db_main.groups
             self.configs_col_main = self.db_main.configs
+
+            # Write Main (Push)
+            self.push_requests_col_main = self.db_main_push.push_requests
 
             # Write Private
             self.channels_col_private = self.db_private.channels
