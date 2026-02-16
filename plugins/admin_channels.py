@@ -20,27 +20,22 @@ async def on_bot_promoted(client: Client, chat_member: ChatMemberUpdated):
     # Check if promoted to Admin
     if chat_member.new_chat_member.status == ChatMemberStatus.ADMINISTRATOR:
         chat = chat_member.chat
-        logger.info(f"Bot promoted to admin in {chat.title} ({chat.id})")
+        logger.info(f"Channel admin gained: {chat.id}")
 
-        # Notify Admins (All configured admins)
-        for admin_id in Config.ADMIN_IDS:
-            try:
+        # Automatically add as storage channel
+        try:
+            invite_link = chat.invite_link
+            await db.add_channel(chat.id, chat.title, chat.username, "storage", invite_link)
+
+            # Notify the user who added the bot (if they are admin)
+            action_by = chat_member.from_user
+            if action_by and action_by.id in Config.ADMIN_IDS:
                 await client.send_message(
-                    admin_id,
-                    f"📢 **New Channel Request**\n\n"
-                    f"**Title:** {chat.title}\n"
-                    f"**ID:** `{chat.id}`\n"
-                    f"**Username:** @{chat.username or 'None'}\n\n"
-                    "Do you want to accept this channel?",
-                    reply_markup=InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton("✅ Accept", callback_data=f"chan_ask_type|{chat.id}"),
-                            InlineKeyboardButton("❌ Reject", callback_data=f"chan_reject|{chat.id}")
-                        ]
-                    ])
+                    action_by.id,
+                    f"✅ I am now admin in this channel (**{chat.title}**) and can use it as storage."
                 )
-            except Exception as e:
-                logger.error(f"Failed to notify admin {admin_id}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to auto-add channel {chat.id}: {e}")
 
 # --- Callback: Accept/Reject Channel ---
 @Client.on_callback_query(filters.regex(r"^chan_(ask_type|reject|set_type)\|"))

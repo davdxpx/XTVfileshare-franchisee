@@ -43,6 +43,9 @@ async def on_forward_received(client: Client, message: Message):
     # Auto-trigger single file mode if not in state
     if user_id not in admin_states:
         if message.forward_from_chat:
+            # Log
+            logger.info(f"Forward detected from storage channel: {message.forward_from_chat.id} → starting bundle creation")
+
             # Single file forward trigger
             admin_states[user_id] = {
                 "step": "select_media_type", # Jump straight to type selection
