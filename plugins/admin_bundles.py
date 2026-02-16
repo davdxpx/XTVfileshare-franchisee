@@ -708,6 +708,9 @@ async def on_push_confirm(client, callback):
         await callback.answer("No bundles selected.", show_alert=True)
         return
 
+    # Identify self for origin data
+    me = await client.get_me()
+
     inserted_count = 0
     skipped_count = 0
     errors = []
@@ -755,7 +758,9 @@ async def on_push_confirm(client, callback):
                 "nehmer_id": user_id, # Current Admin User
                 "status": "pending",
                 "timestamp": datetime.utcnow(),
-                "private_bundle_ids": [code] # Single bundle
+                "private_bundle_ids": [code], # Single bundle
+                "origin_bot_username": me.username,
+                "origin_bot_id": me.id
             }
 
             try:

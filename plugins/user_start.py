@@ -192,6 +192,28 @@ async def process_bundle_start_internal(client, user_id, chat_id, code, force_di
         await reply_method("❌ Invalid link.")
         return
 
+    # --- Origin Redirect Logic ---
+    origin_bot_username = bundle.get("origin_bot_username")
+
+    if origin_bot_username and Config.BOT_USERNAME:
+        # Check if we are the origin
+        origin_clean = origin_bot_username.lstrip("@").lower()
+        my_clean = Config.BOT_USERNAME.lstrip("@").lower()
+
+        if origin_clean != my_clean:
+            # Not us -> Redirect
+            link = f"https://t.me/{origin_clean}?start={code}"
+            text = (
+                f"⚠️ **This bundle is hosted on another bot!**\n\n"
+                f"Please click the button below to access the files."
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Get Files Here", url=link)]
+            ])
+            await reply_method(text, reply_markup=markup)
+            return
+    # -----------------------------
+
     is_premium = await db.is_premium_user(user_id)
 
     if not is_premium:
