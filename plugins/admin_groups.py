@@ -123,16 +123,22 @@ async def manage_group_bundles(client, callback):
 @Client.on_callback_query(filters.regex(r"^rem_bund_from_grp\|"))
 async def remove_bundle_from_group(client, callback):
     _, g_code, b_code = callback.data.split("|")
-    await db.remove_bundle_from_group(g_code, b_code)
-    await callback.answer("Removed!", show_alert=True)
+    success = await db.remove_bundle_from_group(g_code, b_code)
+    if success:
+        await callback.answer("Removed!", show_alert=True)
+    else:
+        await callback.answer("❌ Read-only: Cannot edit Global Group.", show_alert=True)
     await manage_group_bundles(client, callback) # Refresh
 
 @Client.on_callback_query(filters.regex(r"^del_group_confirm\|"))
 async def del_group_confirm(client, callback):
     code = callback.data.split("|")[1]
-    await db.delete_group(code)
-    await db.add_log("delete_group", callback.from_user.id, f"Deleted {code}")
-    await callback.answer("Group deleted!", show_alert=True)
+    success = await db.delete_group(code)
+    if success:
+        await db.add_log("delete_group", callback.from_user.id, f"Deleted {code}")
+        await callback.answer("Group deleted!", show_alert=True)
+    else:
+        await callback.answer("❌ Read-only: Cannot delete Global Group.", show_alert=True)
     await list_groups(client, callback)
 
 @Client.on_callback_query(filters.regex(r"^rename_group\|"))
@@ -380,8 +386,11 @@ async def group_input_handler(client, message):
     if s_key == "wait_group_rename":
         new_title = message.text.strip()
         code = state["code"]
-        await db.update_group_title(code, new_title)
-        await db.add_log("rename_group", user_id, f"Renamed {code} to {new_title}")
-        await message.reply(f"✅ Group renamed to: `{new_title}`")
+        success = await db.update_group_title(code, new_title)
+        if success:
+            await db.add_log("rename_group", user_id, f"Renamed {code} to {new_title}")
+            await message.reply(f"✅ Group renamed to: `{new_title}`")
+        else:
+             await message.reply("❌ Read-only: Cannot rename Global Group.")
         del group_states[user_id]
         return

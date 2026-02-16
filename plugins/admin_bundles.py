@@ -6,6 +6,7 @@ from utils.helpers import generate_random_code, get_file_id
 from utils.tmdb import search_tmdb, get_tmdb_details
 from log import get_logger
 import asyncio
+import time
 
 logger = get_logger(__name__)
 
@@ -215,14 +216,22 @@ async def on_text_input(client, message):
         # Handle search input
         query = message.text.strip().lower()
 
-        # Search both pending and approved?
-        # Let's search approved (MainDB) and pending (PrivateDB)
-        # Search Pending
-        pending_cursor = db.push_requests_col.find({"title": {"$regex": query, "$options": "i"}, "status": "pending"})
+        # Build query criteria
+        search_criteria = [{"title": {"$regex": query, "$options": "i"}}, {"tmdb_id": query}]
+        if query.isdigit():
+            search_criteria.append({"tmdb_id": int(query)})
+
+        # Search Pending (PrivateDB)
+        pending_cursor = db.push_requests_col.find({
+            "$or": search_criteria,
+            "status": "pending"
+        })
         pending = await pending_cursor.to_list(length=5)
 
-        # Search Approved
-        approved_cursor = db.bundles_col_main.find({"title": {"$regex": query, "$options": "i"}})
+        # Search Approved (MainDB)
+        approved_cursor = db.bundles_col_main.find({
+            "$or": search_criteria
+        })
         approved = await approved_cursor.to_list(length=5)
 
         text = f"🔍 **Search Results for:** `{query}`\n\n"
