@@ -132,18 +132,14 @@ async def main():
     # Run Cleanup (Fix pollution from previous syncs)
     await db.perform_cache_cleanup()
 
-    # Start Security Monitor (Non-blocking task)
-    # We pass 'app' later? No, app is created below.
-    # We can't pass 'app' to check_security before app is created.
-    # But check_security is a loop. We can assign app to a global or passed object later?
-    # Or start it AFTER app creation?
-    # "Start Security Monitor" is currently before app creation.
-    # Let's move it after app creation so we can pass 'app' if we refactor,
-    # but the function signature is async def check_security_and_connectivity(): (no args).
-    # We need to change the function signature or wrap it.
-    # But main() calls it.
-    # Let's move the call to AFTER app init and pass app.
     await seed_tasks()
+
+    # Validate Franchise Info
+    if not Config.FRANCHISEE_ID or not Config.FRANCHISEE_PASSWORD:
+        logger.warning("⚠️  MISSING FRANCHISEE_ID OR FRANCHISEE_PASSWORD! PLEASE CHECK .ENV")
+    else:
+        logger.info(f"✅ Franchisee ID: {Config.FRANCHISEE_ID}")
+        logger.info("✅ Franchisee Password: [CONFIGURED]")
 
     # Initialize Bot
     plugins = dict(root="plugins")
@@ -182,14 +178,6 @@ async def main():
 
     # Warmup Peer Cache
     logger.info("Warming up peer cache...")
-
-    # Cache Backup Channel
-    if Config.BACKUP_CHANNEL_ID:
-        try:
-            await app.get_chat(Config.BACKUP_CHANNEL_ID)
-            logger.info(f"Cached Backup Channel: {Config.BACKUP_CHANNEL_ID}")
-        except Exception as e:
-            logger.error(f"Failed to cache Backup Channel {Config.BACKUP_CHANNEL_ID}: {e}")
 
     try:
         channels = await db.get_approved_channels()

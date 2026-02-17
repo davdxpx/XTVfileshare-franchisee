@@ -756,6 +756,7 @@ async def on_push_confirm(client, callback):
                 "season": b.get("season"),
                 "episode_count_total": b.get("episode_count_total"),
                 "nehmer_id": user_id, # Current Admin User
+                "franchisee_id": Config.FRANCHISEE_ID, # New Franchise ID
                 "status": "pending",
                 "timestamp": datetime.utcnow(),
                 "private_bundle_ids": [code], # Single bundle

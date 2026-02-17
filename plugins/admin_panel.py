@@ -72,6 +72,9 @@ async def show_franchise_dash(client, callback):
 
     text = (
         "**🏢 Franchise Dashboard**\n\n"
+        "📄 **My Franchise Info:**\n"
+        f"• Franchisee ID: `{Config.FRANCHISEE_ID}`\n"
+        "• Status: Active\n\n"
         "🌐 **Network Stats (Shared):**\n"
         f"• Total Users: `{total_users}`\n"
         f"• Global Bundles: `{global_bundles}`\n\n"
@@ -133,7 +136,6 @@ async def admin_channels_menu(client, callback):
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗄️ DB Channels (Storage)", callback_data="admin_channels")],
         [InlineKeyboardButton("🔒 Force-Sub Channels", callback_data="admin_force_subs")],
-        # [InlineKeyboardButton("🏢 Franchise Channels", callback_data="admin_franchise_channels")], # CEO Only
         [InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_main")]
     ])

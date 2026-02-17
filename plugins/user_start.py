@@ -194,6 +194,7 @@ async def process_bundle_start_internal(client, user_id, chat_id, code, force_di
 
     # --- Origin Redirect Logic ---
     origin_bot_username = bundle.get("origin_bot_username")
+    origin_codes = bundle.get("origin_bundle_codes", [])
 
     if origin_bot_username and Config.BOT_USERNAME:
         # Check if we are the origin
@@ -202,7 +203,9 @@ async def process_bundle_start_internal(client, user_id, chat_id, code, force_di
 
         if origin_clean != my_clean:
             # Not us -> Redirect
-            link = f"https://t.me/{origin_clean}?start={code}"
+            target_code = origin_codes[0] if origin_codes else code
+            link = f"https://t.me/{origin_clean}?start={target_code}"
+
             text = (
                 f"This bundle is hosted by another XTV bot.\n\n"
                 f"Click the button below to receive the files."
