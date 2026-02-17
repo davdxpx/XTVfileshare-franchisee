@@ -22,7 +22,6 @@ class Database:
         self.bundles_col_main = None
         self.groups_col_main = None
         self.configs_col_main = None
-        self.franchisees_col_main = None
 
         # PrivateDB Collections (Local Write)
         self.channels_col_private = None
@@ -92,7 +91,6 @@ class Database:
             self.bundles_col_main = self.db_main.bundles
             self.groups_col_main = self.db_main.groups
             self.configs_col_main = self.db_main.configs
-            self.franchisees_col_main = self.db_main.franchisees
 
             # Write Main (Push Requests via Limited Role)
             self.push_requests_col_main = self.db_main.push_requests
@@ -756,61 +754,5 @@ class Database:
 
     async def get_all_groups(self):
         return await self.groups_col_private.find({}).to_list(length=1000)
-
-    # --- Franchisees ---
-    async def add_franchisee(self, data):
-        """
-        Adds a new franchisee to MainDB.
-        data dict must include: franchisee_id, password, bot_id, etc.
-        """
-        # Ensure ID is int
-        if "user_id" in data:
-            data["user_id"] = int(data["user_id"])
-
-        # Hash password for security
-        if "password" in data:
-            import hashlib
-            # Use a copy to avoid modifying the input dict reference if needed elsewhere
-            # But here we are modifying 'data' which is passed to update_one.
-            # We must ensure we don't break the caller's usage of 'password'.
-            # The caller (admin_franchise.py) uses a local variable 'password' for the message,
-            # so modifying data['password'] is acceptable, but safer to copy.
-            # However, we want to STORE the hash.
-            # So we update data['password'] to the hash.
-            data["password"] = hashlib.sha256(data["password"].encode()).hexdigest()
-
-        await self.franchisees_col_main.update_one(
-            {"user_id": data["user_id"]},
-            {"$set": data},
-            upsert=True
-        )
-        return True
-
-    async def get_franchisee(self, user_id):
-        return await self.franchisees_col_main.find_one({"user_id": user_id})
-
-    async def verify_franchisee_password(self, user_id, password):
-        user = await self.get_franchisee(user_id)
-        if not user:
-            return False
-
-        import hashlib
-        hashed_input = hashlib.sha256(password.encode()).hexdigest()
-        stored = user.get("password")
-        return stored == hashed_input
-
-    async def get_all_franchisees(self):
-        return await self.franchisees_col_main.find({}).to_list(length=1000)
-
-    async def update_franchisee(self, user_id, update_data):
-        await self.franchisees_col_main.update_one(
-            {"user_id": user_id},
-            {"$set": update_data}
-        )
-        return True
-
-    async def delete_franchisee(self, user_id):
-        await self.franchisees_col_main.delete_one({"user_id": user_id})
-        return True
 
 db = Database()
