@@ -24,7 +24,7 @@ async def show_main_menu(message_or_callback):
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
-            InlineKeyboardButton("🏢 Franchise Dashboard", callback_data="admin_franchise_dash")
+            InlineKeyboardButton("🏢 Manage Franchises", callback_data="admin_manage_franchises")
         ],
         [
             InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings_menu"),
