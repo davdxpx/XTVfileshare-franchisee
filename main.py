@@ -136,7 +136,8 @@ async def main():
 
     # Validate Franchise Info
     if not Config.FRANCHISEE_ID or not Config.FRANCHISEE_PASSWORD:
-        logger.warning("⚠️  MISSING FRANCHISEE_ID OR FRANCHISEE_PASSWORD! PLEASE CHECK .ENV")
+        logger.critical("⚠️  MISSING FRANCHISEE_ID OR FRANCHISEE_PASSWORD! PLEASE CHECK .ENV")
+        sys.exit("CRITICAL: Franchise Info Missing. Bot cannot start.")
     else:
         logger.info(f"✅ Franchisee ID: {Config.FRANCHISEE_ID}")
         logger.info("✅ Franchisee Password: [CONFIGURED]")
