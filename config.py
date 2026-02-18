@@ -44,8 +44,11 @@ class Config:
 
     TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 
+    # Franchise Info (New v2.0.0)
+    FRANCHISEE_ID = os.getenv("FRANCHISEE_ID", "")
+    FRANCHISEE_PASSWORD = os.getenv("FRANCHISEE_PASSWORD", "")
+
     # Channels
-    BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))
     CEO_CHANNEL_ID = int(os.getenv("CEO_CHANNEL_ID", "0"))
 
     # Default Configs (fallback if DB empty)
@@ -61,7 +64,7 @@ class Config:
     BOT_USERNAME = ""
 
     # Bot Version
-    BOT_VERSION = "1.8.0"
+    BOT_VERSION = "2.0.0"
 
     # Start Time
     START_TIME = None
