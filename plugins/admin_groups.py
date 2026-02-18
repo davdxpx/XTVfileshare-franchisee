@@ -6,8 +6,18 @@ from db import db
 from utils.helpers import generate_random_code
 from utils.tmdb import get_tmdb_details
 from log import get_logger
+from plugins.admin_series import refresh_series_channel
 
 logger = get_logger(__name__)
+
+async def trigger_series_update(client, tmdb_id, text="New content added! ✔️"):
+    if not tmdb_id: return
+    channels = await db.get_series_channel_by_tmdb(tmdb_id)
+    for ch in channels:
+        try:
+            await refresh_series_channel(client, ch["chat_id"], update_text=text)
+        except Exception as e:
+            logger.error(f"Failed to refresh series channel {ch['chat_id']}: {e}")
 
 # State for group wizard
 # {user_id: {"state": "...", "data": ...}}
@@ -123,8 +133,13 @@ async def manage_group_bundles(client, callback):
 @Client.on_callback_query(filters.regex(r"^rem_bund_from_grp\|"))
 async def remove_bundle_from_group(client, callback):
     _, g_code, b_code = callback.data.split("|")
+    group = await db.get_group(g_code)
+    tmdb_id = group.get("tmdb_id") if group else None
+
     success = await db.remove_bundle_from_group(g_code, b_code)
     if success:
+        if tmdb_id:
+            await trigger_series_update(client, tmdb_id, "Bundle removed from group.")
         await callback.answer("Removed!", show_alert=True)
     else:
         await callback.answer("❌ Read-only: Cannot edit Global Group.", show_alert=True)
@@ -133,8 +148,13 @@ async def remove_bundle_from_group(client, callback):
 @Client.on_callback_query(filters.regex(r"^del_group_confirm\|"))
 async def del_group_confirm(client, callback):
     code = callback.data.split("|")[1]
+    group = await db.get_group(code)
+    tmdb_id = group.get("tmdb_id") if group else None
+
     success = await db.delete_group(code)
     if success:
+        if tmdb_id:
+            await trigger_series_update(client, tmdb_id, "Group deleted.")
         await db.add_log("delete_group", callback.from_user.id, f"Deleted {code}")
         await callback.answer("Group deleted!", show_alert=True)
     else:
@@ -355,6 +375,12 @@ async def create_group_click(client, callback):
 
         await db.add_log("create_group", callback.from_user.id, f"Created {group_title} ({code})")
 
+        # Trigger Series Update
+        try:
+             await trigger_series_update(client, tmdb_id, f"New Group: {group_title} added! ✔️")
+        except Exception as e:
+             logger.error(f"Failed to update series channel: {e}")
+
         # Mark Request as Done
         try:
              await db.mark_request_done(tmdb_id, mtype)
@@ -386,8 +412,14 @@ async def group_input_handler(client, message):
     if s_key == "wait_group_rename":
         new_title = message.text.strip()
         code = state["code"]
+        group = await db.get_group(code)
+        tmdb_id = group.get("tmdb_id") if group else None
+
         success = await db.update_group_title(code, new_title)
         if success:
+            if tmdb_id:
+                await trigger_series_update(client, tmdb_id, f"Renamed Group: {new_title}")
+
             await db.add_log("rename_group", user_id, f"Renamed {code} to {new_title}")
             await message.reply(f"✅ Group renamed to: `{new_title}`")
         else:

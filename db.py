@@ -283,6 +283,40 @@ class Database:
             return True
         return False
 
+    # --- Series Channels ---
+    async def add_series_channel(self, chat_id, title, username, tmdb_id, poster_msg_id, buttons_msg_id, instruction_msg_id):
+        await self.channels_col_private.update_one(
+            {"chat_id": chat_id},
+            {"$set": {
+                "title": title,
+                "username": username,
+                "approved": True,
+                "type": "series",
+                "tmdb_id": str(tmdb_id),
+                "poster_msg_id": poster_msg_id,
+                "buttons_msg_id": buttons_msg_id,
+                "instruction_msg_id": instruction_msg_id,
+                "created_at": time.time()
+            }},
+            upsert=True
+        )
+
+    async def get_series_channels(self):
+        return await self.channels_col_private.find({"type": "series"}).to_list(length=100)
+
+    async def get_series_channel_by_tmdb(self, tmdb_id):
+        cursor = self.channels_col_private.find({"type": "series", "tmdb_id": str(tmdb_id)})
+        return await cursor.to_list(length=10)
+
+    async def update_series_channel_messages(self, chat_id, buttons_msg_id, instruction_msg_id=None):
+        update = {"buttons_msg_id": buttons_msg_id}
+        if instruction_msg_id:
+            update["instruction_msg_id"] = instruction_msg_id
+        await self.channels_col_private.update_one(
+            {"chat_id": chat_id},
+            {"$set": update}
+        )
+
     # --- Bundles ---
     async def create_bundle(self, code, file_ids, source_channel, title, original_range, **kwargs):
         # Write to PrivateDB
