@@ -4,6 +4,7 @@ from pyrogram.enums import ChatMemberStatus
 from config import Config
 from db import db
 from log import get_logger
+from utils.states import pending_series_setups
 
 logger = get_logger(__name__)
 
@@ -20,6 +21,29 @@ async def on_bot_promoted(client: Client, chat_member: ChatMemberUpdated):
     # Check if promoted to Admin
     if chat_member.new_chat_member.status == ChatMemberStatus.ADMINISTRATOR:
         chat = chat_member.chat
+
+        # Check for Pending Series Setup
+        # We check both ID and Username (case-insensitive) just in case
+        is_pending = False
+        if chat.id in pending_series_setups:
+            is_pending = True
+        elif chat.username and f"@{chat.username.lower()}" in pending_series_setups:
+             # Remap to ID for consistency in logic
+             pending_series_setups[chat.id] = pending_series_setups.pop(f"@{chat.username.lower()}")
+             is_pending = True
+
+        if is_pending:
+            logger.info(f"Series Channel Setup triggered for {chat.title} ({chat.id})")
+            try:
+                from plugins.admin_series import setup_series_channel
+                await setup_series_channel(client, chat.id)
+                return
+            except Exception as e:
+                logger.error(f"Failed to setup series channel: {e}")
+                # Clean up state
+                if chat.id in pending_series_setups:
+                    del pending_series_setups[chat.id]
+
         logger.info(f"Bot promoted to admin in {chat.title} ({chat.id})")
 
         # Notify Admins (All configured admins)

@@ -134,6 +134,7 @@ async def show_stats(client, callback):
 async def admin_channels_menu(client, callback):
     text = "**📢 Channel Management**"
     markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📺 Series Channels", callback_data="admin_series_menu")],
         [InlineKeyboardButton("🗄️ DB Channels (Storage)", callback_data="admin_channels")],
         [InlineKeyboardButton("🔒 Force-Sub Channels", callback_data="admin_force_subs")],
         [InlineKeyboardButton("📢 Force-Share Channels", callback_data="admin_share_channels")],
