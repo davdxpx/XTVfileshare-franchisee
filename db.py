@@ -493,6 +493,11 @@ class Database:
          cursor = self.users_col.find({"is_premium": True})
          return await cursor.to_list(length=1000)
 
+    async def is_user_banned(self, user_id):
+        """Check if a user is globally banned."""
+        user = await self.users_col.find_one({"user_id": user_id, "banned": True})
+        return True if user else False
+
     # --- Referrals ---
     async def set_referrer(self, user_id, referrer_id):
         user = await self.users_col.find_one({"user_id": user_id})
