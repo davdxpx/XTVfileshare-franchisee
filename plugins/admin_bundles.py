@@ -771,9 +771,6 @@ async def on_push_confirm(client, callback):
                 inserted_count += 1
                 logger.info(f"Push inserted to MainDB.push_requests: {inserted_id}")
 
-                # XP Reward: Awarded by CEO bot on Approval
-                # await db.add_xp(user_id, 50) # Removed to avoid double count/premature award
-
                 # Log to PrivateDB Local History
                 await db.push_requests_col.insert_one({
                     "code": code,
