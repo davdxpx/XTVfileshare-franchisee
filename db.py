@@ -464,11 +464,86 @@ class Database:
 
     async def add_request(self, user_id):
         now = time.time()
+        # Increment total_requests for Request Rank
         await self.users_col.update_one(
             {"user_id": user_id},
-            {"$push": {"requests": now}},
+            {"$push": {"requests": now}, "$inc": {"total_requests": 1}},
             upsert=True
         )
+
+    # --- Profile & Ranks ---
+    async def add_xp(self, user_id, amount):
+        if amount <= 0: return
+        await self.users_col.update_one(
+            {"user_id": user_id},
+            {"$inc": {"xp_fileshare": amount}}
+        )
+
+    async def ensure_full_user_profile(self, user_id):
+        user = await self.users_col.find_one({"user_id": user_id})
+        if not user:
+            await self.ensure_user(user_id)
+            user = await self.users_col.find_one({"user_id": user_id})
+
+        updates = {}
+
+        # 1. Backfill XP from Referrals
+        # Check explicit flag to avoid race condition with add_xp
+        if not user.get("xp_backfilled", False):
+            referral_count = user.get("referral_count", 0)
+            backfill_amount = referral_count * 100
+
+            current_xp = user.get("xp_fileshare", 0)
+            xp_fileshare = current_xp + backfill_amount
+
+            updates["xp_fileshare"] = xp_fileshare
+            updates["xp_backfilled"] = True
+            user["xp_fileshare"] = xp_fileshare
+        else:
+            xp_fileshare = user.get("xp_fileshare", 0)
+
+        # 2. Get Total Requests
+        if "total_requests" not in user:
+            # Best effort initialization from pruned history
+            reqs = user.get("requests", [])
+            total_requests = len(reqs)
+            updates["total_requests"] = total_requests
+            user["total_requests"] = total_requests
+        else:
+            total_requests = user.get("total_requests", 0)
+
+        # 3. Calculate Ranks
+        from utils.ranks import REQUEST_RANKS, FILESHARE_RANKS, get_rank_info, get_badges
+
+        req_info = get_rank_info(total_requests, REQUEST_RANKS)
+        fs_info = get_rank_info(xp_fileshare, FILESHARE_RANKS)
+
+        updates["rank_request"] = req_info["current_rank"]
+        updates["rank_fileshare"] = fs_info["current_rank"]
+        updates["xp_request"] = total_requests # Prompt compliance
+
+        # 4. Badges (Run once if missing)
+        if "badges" not in user:
+            joined_at = user.get("joined_at", time.time())
+            # Determine Early Adopter (Heavy query, do only if needed)
+            # Find how many users joined before this one
+            try:
+                count_older = await self.users_col.count_documents({"joined_at": {"$lt": joined_at}})
+                user_index = count_older + 1
+            except Exception:
+                user_index = 999999
+
+            badges = get_badges(joined_at, user_index)
+            updates["badges"] = badges
+            user["badges"] = badges
+
+        # Apply Updates
+        if updates:
+            await self.users_col.update_one({"user_id": user_id}, {"$set": updates})
+            # Merge updates into user object for return
+            user.update(updates)
+
+        return user, req_info, fs_info
 
     # --- Premium ---
     async def add_premium_user(self, user_id, duration_days):

@@ -36,6 +36,9 @@ async def deliver_bundle(client, user_id, chat_id, code):
     # Add to History (New Feature)
     bundle_title = bundle.get("title", "Unknown Bundle")
 
+    # XP Reward: Opening Bundle
+    await db.add_xp(user_id, 10)
+
     # Premium Limit (10 vs 3)
     limit = 10 if await db.is_premium_user(user_id) else 3
     await db.add_user_history(user_id, code, bundle_title, limit=limit)
@@ -515,6 +518,8 @@ async def quest_ans(client, callback):
     if ans.lower() == correct.lower():
         await callback.answer("✅ Correct!")
         await callback.message.delete()
+        # XP Reward: Task
+        await db.add_xp(user_id, 25)
         session["quest"]["current_index"] += 1
         await process_quest_step(client, user_id, callback.message.chat.id)
     else:
@@ -549,6 +554,8 @@ async def quest_text_handler(client, message):
         correct = step["data"]["answer"]
         if message.text.strip().lower() == correct.lower():
             await message.reply("✅ Correct!")
+            # XP Reward: Task
+            await db.add_xp(user_id, 25)
             session["quest"]["current_index"] += 1
             await process_quest_step(client, user_id, message.chat.id)
         else:
@@ -576,6 +583,8 @@ async def sub_check_handler(client, callback):
             # Success
             await callback.answer("✅ Verified!")
             await callback.message.delete()
+            # XP Reward: Task (Sub)
+            await db.add_xp(user_id, 25)
             session["quest"]["current_index"] += 1
             await process_quest_step(client, user_id, callback.message.chat.id)
             return
@@ -602,6 +611,9 @@ async def share_verify_fake(client, callback):
     # Success
     session = user_sessions[user_id]
     session["quest"]["current_index"] += 1
+
+    # XP Reward: Task (Share)
+    await db.add_xp(user_id, 25)
 
     await callback.edit_message_text("✅ **Share Verified!**")
     await process_quest_step(client, user_id, callback.message.chat.id)

@@ -132,6 +132,10 @@ async def redeem_command(client, message):
 async def process_referral_reward(client, referrer_id):
     # Increment count
     new_count = await db.increment_referral(referrer_id)
+
+    # XP Reward: Referral
+    await db.add_xp(referrer_id, 100)
+
     # Check Target
     target = await db.get_config("referral_target", 10)
 
