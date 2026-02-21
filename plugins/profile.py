@@ -17,28 +17,47 @@ def generate_profile_text_markup(user, req_info, fs_info, tg_user):
     if user.get("is_premium") and premium_expiry > time.time():
         is_premium = True
 
+    # Professional Formatting
     if is_premium:
         expiry_date = datetime.fromtimestamp(premium_expiry).strftime("%d.%m.%Y")
-        status_line = f"🌟 **Premium** (Expires: {expiry_date})"
+        header = f"⭐️ **VIP DASHBOARD** ⭐️"
+        status_display = f"💎 **Premium Member** (Expires: {expiry_date})"
+        name_display = f"🌟 {first_name}"
     else:
-        status_line = "👤 Free User"
+        header = f"👤 **USER PROFILE**"
+        status_display = "👤 **Free Account**"
+        name_display = f"{first_name}"
 
-    # Fileshare Rank
+    # Fileshare Rank (Prominent)
     fs_rank = fs_info["current_rank"]
     fs_xp = int(user.get("xp_fileshare", 0))
     fs_next_threshold = fs_info["next_threshold"]
     fs_percent = fs_info["progress_percent"]
 
-    fs_bar = format_progress_bar(fs_percent, length=10)
+    # Clean Progress Bar
+    fs_bar = format_progress_bar(fs_percent, length=12) # Longer for impact
 
     if fs_next_threshold:
         xp_text = f"{fs_xp} / {fs_next_threshold} XP"
+        next_rank_text = f"Next: {fs_info['next_rank']}"
     else:
-        xp_text = f"{fs_xp} XP (Max Level)"
+        xp_text = f"{fs_xp} XP"
+        next_rank_text = "Max Level Reached!"
 
-    # Request Rank
+    # Request Rank (Smaller)
     req_rank = req_info["current_rank"]
     total_req = user.get("total_requests", 0)
+    req_next_threshold = req_info["next_threshold"]
+
+    # Optional: Small progress bar for Request Rank too?
+    # Prompt: "Request Rank smaller below". Progress bar "for both ranks".
+    req_percent = req_info["progress_percent"]
+    req_bar = format_progress_bar(req_percent, length=8) # Smaller
+
+    if req_next_threshold:
+        req_xp_text = f"{total_req} / {req_next_threshold}"
+    else:
+        req_xp_text = f"{total_req} (Max)"
 
     # Badges
     badges_list = user.get("badges", [])
@@ -47,9 +66,9 @@ def generate_profile_text_markup(user, req_info, fs_info, tg_user):
         for b in badges_list:
             icon = BADGE_ICONS.get(b, "🏅")
             b_parts.append(f"{icon} {b}")
-        badges_display = "  ".join(b_parts)
+        badges_display = " • ".join(b_parts) # Bullet separator
     else:
-        badges_display = "None yet"
+        badges_display = "None"
 
     # Stats
     referrals = user.get("referral_count", 0)
@@ -59,19 +78,21 @@ def generate_profile_text_markup(user, req_info, fs_info, tg_user):
     last_active_ts = user.get("updated_at", time.time())
     last_active_date = datetime.fromtimestamp(last_active_ts).strftime("%d.%m.%Y %H:%M")
 
+    # Layout
     text = (
-        f"👤 **User Profile**\n\n"
-        f"**Name:** {first_name}\n"
+        f"{header}\n\n"
+        f"**Name:** {name_display}\n"
         f"**ID:** `{user_id}`\n"
-        f"**Status:** {status_line}\n\n"
+        f"{status_display}\n\n"
 
-        f"📊 **Fileshare Rank**\n"
+        f"📊 **FILESHARE RANK**\n"
         f"🏆 **{fs_rank}**\n"
-        f"`[{fs_bar}]` {fs_percent}%\n"
-        f"XP: {xp_text}\n\n"
+        f"`{fs_bar}` **{fs_percent}%**\n"
+        f"_{xp_text} • {next_rank_text}_\n\n"
 
         f"🔰 **Request Rank**\n"
-        f"{req_rank}\n\n"
+        f"{req_rank}\n"
+        f"`{req_bar}` {req_xp_text}\n\n"
 
         f"🏅 **Badges**\n"
         f"{badges_display}\n\n"
@@ -84,7 +105,7 @@ def generate_profile_text_markup(user, req_info, fs_info, tg_user):
     )
 
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data="profile_refresh")],
+        [InlineKeyboardButton("🔄 Refresh Profile", callback_data="profile_refresh")],
         [InlineKeyboardButton("❌ Close", callback_data="profile_close")]
     ])
 
