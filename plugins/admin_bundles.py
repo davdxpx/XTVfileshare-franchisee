@@ -287,15 +287,20 @@ async def on_tmdb_select(client, callback):
         await show_quality_menu(callback, [])
 
 async def show_quality_menu(message_or_callback, selected):
-    # qual_720p, qual_1080p, qual_4k, qual_done
-    options = ["720p", "1080p", "2160p (4K)", "HDR", "H.265"]
+    # Expanded quality options as requested
+    options = [
+        "360p", "480p", "720p", "1080p", "2160p (4K)",
+        "HDR", "HDR10+", "Dolby Vision", "IMAX",
+        "H.264", "H.265", "Dubbed", "Subbed"
+    ]
+
     buttons = []
     for opt in options:
         prefix = "✅ " if opt in selected else ""
         buttons.append(InlineKeyboardButton(f"{prefix}{opt}", callback_data=f"qual_{opt}"))
 
-    # 2 per row
-    rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+    # Arrange 3 per row for better density
+    rows = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
     rows.append([InlineKeyboardButton("Done / Continue ➡️", callback_data="qual_done")])
 
     text = "**Select Qualities/Features:**\n(Click to toggle, then Done)"
