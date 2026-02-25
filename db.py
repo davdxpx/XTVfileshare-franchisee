@@ -17,11 +17,13 @@ class Database:
         self.db_private = None
         self.db_request = None
 
-        # MainDB Collections (Global Read-Only Content)
         self.channels_col_main = None
         self.bundles_col_main = None
         self.groups_col_main = None
         self.configs_col_main = None
+        self.bot_registry_col = None
+        self.franchisees_col = None
+        self.global_events_col = None
 
         # PrivateDB Collections (Local Write)
         self.channels_col_private = None
@@ -91,6 +93,9 @@ class Database:
             self.bundles_col_main = self.db_main.bundles
             self.groups_col_main = self.db_main.groups
             self.configs_col_main = self.db_main.configs
+            self.bot_registry_col = self.db_main.bot_registry
+            self.franchisees_col = self.db_main.franchisees
+            self.global_events_col = self.db_main.global_events
 
             # Write Main (Push Requests via Limited Role)
             self.push_requests_col_main = self.db_main.push_requests

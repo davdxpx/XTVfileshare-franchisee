@@ -9,49 +9,69 @@ from utils.sync_manager import sync_from_main
 
 logger = get_logger(__name__)
 
-async def check_security_and_connectivity(app):
+async def check_franchise_auth_and_heartbeat(app):
     """
-    Robust Security Check:
-    1. CEO_ID mismatch vs MainDB Config
-    2. MainDB Connectivity
-
-    If failure > 5 times or downtime > 24h: Self Destruct.
+    Franchisee Authentication & Heartbeat Loop:
+    1. Authenticates against MainDB.franchisees using ID and Password.
+    2. Sends heartbeat to MainDB.bot_registry.
+    
+    If auth fails (invalid credentials or BANNED), triggers self destruct.
     """
     fail_count = 0
-    max_fails = 5
-
+    max_fails_connection = 144 # 24h of offline tolerance
+    
     while True:
         try:
-            # 1. Check Connectivity & Owner ID
-            stored_owner = await db.get_config("owner_id")
-
-            # If successful read, reset fail count
+            now = time.time()
+            # 1. Check Auth
+            franchisee = await db.franchisees_col.find_one({
+                "franchisee_id": Config.FRANCHISEE_ID,
+                "password": Config.FRANCHISEE_PASSWORD
+            })
+            
+            # Reset connection fail count on successful query
             fail_count = 0
-
-            if stored_owner is None:
-                # First time initialization
-                if Config.CEO_ID:
-                    await db.update_config("owner_id", Config.CEO_ID)
-                    logger.info(f"Owner ID initialized to {Config.CEO_ID}")
-            else:
-                if Config.CEO_ID and stored_owner != Config.CEO_ID:
-                    logger.critical(f"SECURITY ALERT: CEO_ID mismatch! Env: {Config.CEO_ID}, DB: {stored_owner}")
-                    await handle_self_destruct("CEO_ID Mismatch")
-
+            
+            if not franchisee:
+                logger.critical(f"SECURITY ALERT: Invalid Franchisee Credentials for {Config.FRANCHISEE_ID}!")
+                await handle_self_destruct("Invalid Franchise Credentials")
+                break
+                
+            if franchisee.get("status") == "BANNED":
+                logger.critical(f"SECURITY ALERT: Franchisee {Config.FRANCHISEE_ID} has been BANNED by the CEO!")
+                await handle_self_destruct("Franchisee Banned")
+                break
+                
+            # 2. Send Heartbeat to Registry
+            if Config.BOT_USERNAME:
+                line_id = f"FRANCHISE-{Config.FRANCHISEE_ID}"
+                logger.info(f"❤️ Sending Heartbeat... (Line: {line_id})")
+                
+                await db.bot_registry_col.update_one(
+                    {"username": Config.BOT_USERNAME}, 
+                    {
+                        "$set": {
+                            "username": Config.BOT_USERNAME,
+                            "line_id": line_id,
+                            "type": "franchisee",
+                            "status": "ACTIVE",
+                            "last_seen": now,
+                            "updated_at": now
+                        }
+                    },
+                    upsert=True
+                )
+                
         except Exception as e:
             fail_count += 1
-            logger.warning(f"MainDB Connection Failed ({fail_count}): {e}")
-
-            # Request: if Main down > 24h
-            # Check interval is 10 mins (600s).
-            # 24h = 1440 mins = 144 checks.
-            # Using 144 checks = 24h.
-
-            if fail_count >= 144:
+            logger.warning(f"Heartbeat/Auth Connection Failed ({fail_count}): {e}")
+            
+            if fail_count >= max_fails_connection:
                 await handle_self_destruct("MainDB Unreachable > 24h", app=app)
-
-        # Check every 10 mins
-        await asyncio.sleep(600)
+                break
+                
+        # Heartbeat interval
+        await asyncio.sleep(60)
 
 async def handle_self_destruct(reason, app=None):
     logger.critical(f"⚠️ SELF DESTRUCT INITIATED: {reason}")
@@ -173,7 +193,7 @@ async def main():
     logger.info("========================================")
 
     # Start Background Tasks
-    asyncio.create_task(check_security_and_connectivity(app))
+    asyncio.create_task(check_franchise_auth_and_heartbeat(app))
     asyncio.create_task(auto_delete_loop(app))
     asyncio.create_task(sync_loop())
 

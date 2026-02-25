@@ -34,14 +34,13 @@ class ConsoleFormatter(logging.Formatter):
         emoji = self.FORMATS.get(record.levelno, "")
         color = self.COLOR_MAP.get(record.levelno, Colors.RESET)
 
-        # Format: [TIME] [EMOJI] LEVEL :: MESSAGE
+        # Format: [EMOJI] LEVEL :: MESSAGE (Timestamps removed for Railway)
         log_fmt = (
-            f"{Colors.BLUE}[%(asctime)s]{Colors.RESET} "
             f"{color}{emoji}%(levelname)-8s{Colors.RESET} :: "
             f"{color}%(message)s{Colors.RESET}"
         )
 
-        formatter = logging.Formatter(log_fmt, datefmt="%H:%M:%S")
+        formatter = logging.Formatter(log_fmt)
         return formatter.format(record)
 
 def get_logger(name):
