@@ -67,7 +67,7 @@ class Database:
                 try:
                     self.db_user = self.client_user.get_database()
                 except Exception:
-                    self.db_user = self.client_user["fileshare_bot_users"]
+                    self.db_user = self.client_user["userDB-users"]
 
             # 3. PrivateDB Connection (Local Cache/Bundles)
             if Config.PRIVATE_URI == Config.MAIN_URI:
